@@ -29,7 +29,7 @@ from tests.conformance import loader
 # The fixture set this port was written against. Asserted, not merely printed:
 # "we are on an old fixture set" should be visible in the log rather than
 # inferred months later.
-PINNED_SUITE_VERSION = "0.4.0"
+PINNED_SUITE_VERSION = "0.5.0"
 
 
 def test_the_pinned_fixture_version_is_the_one_on_disk() -> None:
