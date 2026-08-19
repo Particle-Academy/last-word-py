@@ -1,0 +1,23 @@
+# Line endings are part of the contract here, so they are pinned rather than
+# left to a clone's `core.autocrlf`.
+#
+# Two reasons, both concrete:
+#
+#  1. The writers are string builders and the OOXML they emit is compared
+#     byte-for-byte against the PHP reference. A source file checked out with
+#     CRLF changes the bytes of any multi-line literal in it.
+#  2. `holy-sheet`'s tool-definition JSON is pinned by a cross-repo SHA-256
+#     that is taken over CRLF-NORMALISED text. A Windows checkout hashes
+#     differently from the same file on Linux, which reads as a drifted schema
+#     when nothing has drifted at all. It has already cost one investigation.
+#
+# The markdown fixtures matter for the same reason: `last-word`'s markdown
+# bridge is asserted byte-exact with LF newlines.
+* text=auto eol=lf
+
+*.docx binary
+*.xlsx binary
+*.pptx binary
+*.png  binary
+*.jpg  binary
+*.jpeg binary
