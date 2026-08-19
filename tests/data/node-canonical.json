@@ -1,0 +1,103 @@
+{
+  "title": "LastWord Canonical",
+  "blocks": [
+    { "type": "heading", "level": 1, "runs": [{ "text": "LastWord Canonical" }] },
+    {
+      "type": "paragraph",
+      "runs": [
+        { "text": "This paragraph shows " },
+        { "text": "bold", "bold": true },
+        { "text": ", " },
+        { "text": "italic", "italic": true },
+        { "text": ", " },
+        { "text": "underline", "underline": true },
+        { "text": ", " },
+        { "text": "strikethrough", "strike": true },
+        { "text": ", " },
+        { "text": "inline code", "code": true },
+        { "text": ", a " },
+        { "text": "link", "link": "https://particle.academy" },
+        { "text": ", " },
+        { "text": "crimson text", "color": "#B91C1C" },
+        { "text": ", and a " },
+        { "text": "highlight", "highlight": "#FDE68A" },
+        { "text": "." }
+      ]
+    },
+    { "type": "heading", "level": 2, "runs": [{ "text": "Lists" }] },
+    {
+      "type": "list",
+      "items": [
+        {
+          "runs": [{ "text": "Alpha" }],
+          "children": [
+            {
+              "runs": [{ "text": "Alpha " }, { "text": "one", "bold": true }],
+              "children": [{ "runs": [{ "text": "Alpha one deep", "italic": true }] }]
+            },
+            { "runs": [{ "text": "Alpha two" }] }
+          ]
+        },
+        { "runs": [{ "text": "Beta" }] }
+      ]
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        {
+          "runs": [{ "text": "First" }],
+          "children": [{ "runs": [{ "text": "First nested" }] }]
+        },
+        { "runs": [{ "text": "Second" }] }
+      ]
+    },
+    { "type": "heading", "level": 3, "runs": [{ "text": "Table" }] },
+    {
+      "type": "table",
+      "rows": [
+        {
+          "header": true,
+          "cells": [
+            { "blocks": [{ "type": "paragraph", "runs": [{ "text": "Name", "bold": true }] }] },
+            { "blocks": [{ "type": "paragraph", "runs": [{ "text": "Format", "bold": true }] }] },
+            { "blocks": [{ "type": "paragraph", "runs": [{ "text": "Notes", "bold": true }] }] }
+          ]
+        },
+        {
+          "cells": [
+            { "blocks": [{ "type": "paragraph", "runs": [{ "text": "holy-sheet" }] }] },
+            { "blocks": [{ "type": "paragraph", "runs": [{ "text": "xlsx" }] }] },
+            { "blocks": [{ "type": "paragraph", "runs": [{ "text": "spreadsheets", "italic": true }] }] }
+          ]
+        },
+        {
+          "cells": [
+            { "blocks": [{ "type": "paragraph", "runs": [{ "text": "dark-slide" }] }] },
+            { "blocks": [{ "type": "paragraph", "runs": [{ "text": "pptx" }] }] },
+            { "blocks": [{ "type": "paragraph", "runs": [{ "text": "decks", "code": true }] }] }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "code",
+      "language": "typescript",
+      "text": "import { Agent } from \"@particle-academy/last-word\";\n\nconst bytes = Agent.toBytes(doc);"
+    },
+    {
+      "type": "quote",
+      "blocks": [{ "type": "paragraph", "runs": [{ "text": "The last word in agentic documents." }] }]
+    },
+    {
+      "type": "image",
+      "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEUlEQVR42mP4z8DwH4QZYAwAR8oH+Rq28akAAAAASUVORK5CYII=",
+      "widthPx": 48,
+      "heightPx": 48,
+      "alt": "Tiny red square"
+    },
+    { "type": "pageBreak" },
+    { "type": "hr" },
+    { "type": "paragraph", "align": "center", "runs": [{ "text": "The end." }] }
+  ]
+}

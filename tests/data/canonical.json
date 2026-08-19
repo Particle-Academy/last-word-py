@@ -1,0 +1,125 @@
+{
+    "title": "Last Word Canonical",
+    "blocks": [
+        {
+            "type": "heading",
+            "level": 1,
+            "runs": [{ "text": "The Last Word" }]
+        },
+        {
+            "type": "paragraph",
+            "runs": [
+                { "text": "A document engine for " },
+                { "text": "agentic", "bold": true },
+                { "text": " docs — " },
+                { "text": "italic", "italic": true },
+                { "text": ", " },
+                { "text": "underlined", "underline": true },
+                { "text": ", " },
+                { "text": "struck", "strike": true },
+                { "text": ", " },
+                { "text": "inline code", "code": true },
+                { "text": ", a " },
+                { "text": "link", "link": "https://particle.academy" },
+                { "text": ", " },
+                { "text": "colored", "color": "#C0392B" },
+                { "text": " and " },
+                { "text": "highlighted", "highlight": "#FFF3A0" },
+                { "text": " text." }
+            ]
+        },
+        {
+            "type": "heading",
+            "level": 2,
+            "runs": [{ "text": "Structure" }]
+        },
+        {
+            "type": "list",
+            "items": [
+                { "runs": [{ "text": "Top-level item" }] },
+                {
+                    "runs": [{ "text": "Item with " }, { "text": "style", "bold": true }],
+                    "children": [
+                        {
+                            "runs": [{ "text": "Second level" }],
+                            "children": [
+                                { "runs": [{ "text": "Third level, " }, { "text": "deep", "italic": true }] }
+                            ]
+                        },
+                        { "runs": [{ "text": "Second level again" }] }
+                    ]
+                },
+                { "runs": [{ "text": "Back at the top" }] }
+            ]
+        },
+        {
+            "type": "list",
+            "ordered": true,
+            "items": [
+                { "runs": [{ "text": "First" }] },
+                {
+                    "runs": [{ "text": "Second" }],
+                    "children": [{ "runs": [{ "text": "Nested ordered" }] }]
+                },
+                { "runs": [{ "text": "Third" }] }
+            ]
+        },
+        {
+            "type": "heading",
+            "level": 3,
+            "runs": [{ "text": "Data" }]
+        },
+        {
+            "type": "table",
+            "rows": [
+                {
+                    "header": true,
+                    "cells": [
+                        { "blocks": [{ "type": "paragraph", "runs": [{ "text": "Name", "bold": true }] }] },
+                        { "blocks": [{ "type": "paragraph", "runs": [{ "text": "Kind", "bold": true }] }] },
+                        { "blocks": [{ "type": "paragraph", "runs": [{ "text": "Notes", "bold": true }] }] }
+                    ]
+                },
+                {
+                    "cells": [
+                        { "blocks": [{ "type": "paragraph", "runs": [{ "text": "holy-sheet" }] }] },
+                        { "blocks": [{ "type": "paragraph", "runs": [{ "text": "xlsx" }] }] },
+                        { "blocks": [{ "type": "paragraph", "runs": [{ "text": "spreadsheets" }] }] }
+                    ]
+                },
+                {
+                    "cells": [
+                        { "blocks": [{ "type": "paragraph", "runs": [{ "text": "last-word" }] }] },
+                        { "blocks": [{ "type": "paragraph", "runs": [{ "text": "docx" }] }] },
+                        { "blocks": [{ "type": "paragraph", "runs": [{ "text": "documents, " }, { "text": "styled", "bold": true }] }] }
+                    ]
+                }
+            ]
+        },
+        {
+            "type": "code",
+            "language": "typescript",
+            "text": "export function lastWord(doc: Doc): Uint8Array {\n  return toBytes(doc);\n}"
+        },
+        {
+            "type": "quote",
+            "blocks": [
+                { "type": "paragraph", "runs": [{ "text": "The palest ink is better than the best memory." }] }
+            ]
+        },
+        {
+            "type": "image",
+            "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR42mP4z8AARAwQCgAf7gP9Y167WwAAAABJRU5ErkJggg==",
+            "widthPx": 96,
+            "heightPx": 96,
+            "alt": "Red square"
+        },
+        { "type": "pageBreak" },
+        { "type": "hr" },
+        {
+            "type": "paragraph",
+            "align": "center",
+            "runs": [{ "text": "The last word." }]
+        }
+    ]
+}

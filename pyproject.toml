@@ -1,0 +1,52 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "last-word"
+version = "0.1.0"
+description = "Zero-dependency docx writer/reader for agentic word-processing documents - JSON model + markdown bridges. The Python mirror of PHP particle-academy/last-word and Node @particle-academy/last-word."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+authors = [{ name = "Particle Academy" }]
+keywords = ["docx", "word", "document", "ooxml", "markdown", "editor", "agent", "fancy", "human-plus"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Typing :: Typed",
+]
+
+# NO runtime dependencies, deliberately and permanently.
+#
+# Both peers say the same thing in their own manifests ("zero-dependency,
+# isomorphic"), and Python is the runtime where it is easiest to break: an
+# all-in-one office library would happily own the document model, and the model
+# is the product. Zip and XML are generic infrastructure and both are in the
+# standard library (`zipfile`, `xml.etree.ElementTree`), so there is nothing
+# left to take a dependency ON.
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.urls]
+Homepage = "https://github.com/Particle-Academy/last-word-py"
+Repository = "https://github.com/Particle-Academy/last-word-py"
+Issues = "https://github.com/Particle-Academy/last-word-py/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/last_word"]
+
+[tool.pytest.ini_options]
+# `pythonpath` rather than an editable install: the suite must run on a bare
+# checkout with nothing but pytest, the same way `npm test` does for the Node
+# mirror.
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-ra"
