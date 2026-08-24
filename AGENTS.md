@@ -162,6 +162,14 @@ the model — so the header returns emphasised and markdown renders
 `| **Name** | **Value** |`. PHP does exactly the same for the same input. The
 chain settles after one application, which is what `test_markdown.py` asserts.
 
+**The MODEL does not round-trip either, for the same reason.**
+`read(to_bytes(doc)) != doc` for a `header: true` table: the reader honestly
+reports the bold it finds. The alternatives were to stop bolding header rows —
+changing every existing consumer's output — or to have the reader strip bold
+from header rows, which would discard bold an author really asked for.
+`fancy-conformance` case `last-word/docx-constructs 0042` spells the loss out,
+and `0044` proves the fixpoint check can return `False` at all.
+
 ## No runtime dependencies. Permanently.
 
 If you think you need one, you have found something worth reporting, not

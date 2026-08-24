@@ -31,6 +31,98 @@ def _error(path: str, message: str) -> dict[str, str]:
     return {"path": path, "message": message}
 
 
+BORDER_STYLES = ("single", "double", "dashed", "dotted", "none")
+BOX_EDGES = ("top", "right", "bottom", "left")
+TABLE_EDGES = (*BOX_EDGES, "insideH", "insideV")
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _check_number(
+    value: Any, path: str, label: str, errors: list[dict[str, str]], positive: bool = False
+) -> None:
+    """A finite number of points, or absent."""
+    if value is None:
+        return
+    if not _is_number(value):
+        errors.append(_error(path, f"{label} must be a number of points"))
+        return
+    if positive and value <= 0:
+        errors.append(_error(path, f"{label} must be greater than zero"))
+
+
+def _check_hex(value: Any, path: str, label: str, errors: list[dict[str, str]]) -> None:
+    if value is not None and (not isinstance(value, str) or _HEX6.match(value) is None):
+        errors.append(_error(path, f"{label} must be a #RRGGBB hex string"))
+
+
+def _check_enum(
+    value: Any, path: str, label: str, allowed: tuple[str, ...], errors: list[dict[str, str]]
+) -> None:
+    if value is not None and value not in allowed:
+        errors.append(_error(path, f"{label} must be one of: " + ", ".join(allowed)))
+
+
+def _check_sides(value: Any, path: str, label: str, errors: list[dict[str, str]]) -> None:
+    if value is None:
+        return
+    if not isinstance(value, dict):
+        errors.append(_error(path, f"{label} must be an object of sides in points"))
+        return
+    for side in BOX_EDGES:
+        _check_number(value.get(side), f"{path}.{side}", side, errors)
+
+
+def _check_borders(
+    value: Any, path: str, label: str, edges: tuple[str, ...], errors: list[dict[str, str]]
+) -> None:
+    if value is None:
+        return
+    if not isinstance(value, dict):
+        errors.append(_error(path, f"{label} must be an object keyed by edge"))
+        return
+    for edge in edges:
+        border = value.get(edge)
+        if border is None:
+            continue
+        edge_path = f"{path}.{edge}"
+        if not isinstance(border, dict):
+            errors.append(
+                _error(edge_path, "a border must be an object ({style?, width?, color?})")
+            )
+            continue
+        _check_enum(border.get("style"), f"{edge_path}.style", "border style", BORDER_STYLES, errors)
+        _check_number(border.get("width"), f"{edge_path}.width", "border width", errors, True)
+        _check_hex(border.get("color"), f"{edge_path}.color", "border color", errors)
+
+
+def _check_paragraph_props(block: dict, path: str, errors: list[dict[str, str]]) -> None:
+    """The properties every paragraph-shaped block accepts.
+
+    Shared by ``paragraph``, ``heading`` and a list item, because a heading IS a
+    paragraph -- before this, a section label that needed spacing had to be a
+    bold paragraph impersonating one.
+    """
+    _check_enum(block.get("align"), f"{path}.align", "align", Schema.ALIGNMENTS, errors)
+    _check_number(block.get("spaceBefore"), f"{path}.spaceBefore", "spaceBefore", errors)
+    _check_number(block.get("spaceAfter"), f"{path}.spaceAfter", "spaceAfter", errors)
+    _check_number(
+        block.get("lineHeight"),
+        f"{path}.lineHeight",
+        "lineHeight (a multiple of single spacing)",
+        errors,
+        True,
+    )
+    _check_number(block.get("indentLeft"), f"{path}.indentLeft", "indentLeft", errors)
+    _check_number(block.get("indentRight"), f"{path}.indentRight", "indentRight", errors)
+    if block.get("keepNext") is not None and not isinstance(block["keepNext"], bool):
+        errors.append(_error(f"{path}.keepNext", "keepNext must be a boolean"))
+    _check_hex(block.get("shading"), f"{path}.shading", "shading", errors)
+    _check_borders(block.get("borders"), f"{path}.borders", "borders", BOX_EDGES, errors)
+
+
 class Validator:
     """Mirrors `LastWord\\Schema\\Validator`."""
 
@@ -42,6 +134,29 @@ class Validator:
             # Python has no such gate, and returning a structured error beats a
             # TypeError from three frames deeper.
             return [_error("", "document must be an object with a \"blocks\" list")]
+
+        if doc.get("defaultFont") is not None and not isinstance(doc["defaultFont"], str):
+            errors.append(_error("defaultFont", "defaultFont must be a font family name"))
+        _check_number(doc.get("defaultSize"), "defaultSize", "defaultSize", errors, True)
+
+        page = doc.get("page")
+        if page is not None:
+            if not isinstance(page, dict):
+                errors.append(
+                    _error("page", "page must be an object ({size?, orientation?, margins?})")
+                )
+            else:
+                _check_enum(
+                    page.get("size"), "page.size", "page size", ("letter", "legal", "a4"), errors
+                )
+                _check_enum(
+                    page.get("orientation"),
+                    "page.orientation",
+                    "page orientation",
+                    ("portrait", "landscape"),
+                    errors,
+                )
+                _check_sides(page.get("margins"), "page.margins", "page margins", errors)
 
         if "title" in doc and not isinstance(doc["title"], str):
             errors.append(_error("title", "title must be a string when present"))
@@ -120,14 +235,11 @@ class Validator:
                 )
             )
         self._validate_runs(block.get("runs"), f"{path}.runs", errors)
+        _check_paragraph_props(block, path, errors)
 
     def _validate_paragraph(self, block: dict, path: str, errors: list[dict[str, str]]) -> None:
         self._validate_runs(block.get("runs"), f"{path}.runs", errors)
-        align = block.get("align")
-        if align is not None and align not in Schema.ALIGNMENTS:
-            errors.append(
-                _error(f"{path}.align", "align must be one of: " + ", ".join(Schema.ALIGNMENTS))
-            )
+        _check_paragraph_props(block, path, errors)
 
     def _validate_list(self, block: dict, path: str, errors: list[dict[str, str]]) -> None:
         items: Any = block.get("items")
@@ -145,6 +257,7 @@ class Validator:
                 errors.append(_error(item_path, 'list item must be an object with "runs"'))
                 continue
             self._validate_runs(item.get("runs"), f"{item_path}.runs", errors)
+            _check_paragraph_props(item, item_path, errors)
             if item.get("children") is not None:
                 if not is_list(item["children"]):
                     errors.append(
@@ -156,6 +269,43 @@ class Validator:
                     )
 
     def _validate_table(self, block: dict, path: str, errors: list[dict[str, str]]) -> None:
+        _check_enum(
+            block.get("align"), f"{path}.align", "table align", ("left", "center", "right"), errors
+        )
+        _check_borders(
+            block.get("borders"), f"{path}.borders", "table borders", TABLE_EDGES, errors
+        )
+        _check_sides(block.get("cellPadding"), f"{path}.cellPadding", "table cellPadding", errors)
+
+        width = block.get("width")
+        if width is not None and (not _is_number(width) or width <= 0 or width > 100):
+            errors.append(
+                _error(
+                    f"{path}.width",
+                    "table width must be a percentage of the text column, "
+                    "above 0 and at most 100",
+                )
+            )
+
+        widths = block.get("widths")
+        if widths is not None:
+            if not is_list(widths) or not widths:
+                errors.append(
+                    _error(
+                        f"{path}.widths",
+                        "table widths must be a non-empty array of relative column weights",
+                    )
+                )
+            else:
+                for i, w in enumerate(widths):
+                    if not _is_number(w) or w < 0:
+                        errors.append(
+                            _error(
+                                f"{path}.widths[{i}]",
+                                "a column weight must be a non-negative number",
+                            )
+                        )
+
         rows: Any = block.get("rows")
         if not is_list(rows):
             errors.append(_error(f"{path}.rows", 'table requires a "rows" array'))
@@ -172,6 +322,28 @@ class Validator:
                         _error(f"{cell_path}.blocks", 'table cell requires a "blocks" array')
                     )
                     continue
+                _check_hex(cell.get("shading"), f"{cell_path}.shading", "cell shading", errors)
+                _check_borders(
+                    cell.get("borders"), f"{cell_path}.borders", "cell borders", BOX_EDGES, errors
+                )
+                _check_sides(cell.get("padding"), f"{cell_path}.padding", "cell padding", errors)
+                _check_enum(
+                    cell.get("valign"),
+                    f"{cell_path}.valign",
+                    "cell valign",
+                    ("top", "center", "bottom"),
+                    errors,
+                )
+                for span in ("colSpan", "rowSpan"):
+                    value = cell.get(span)
+                    if value is not None and (
+                        not isinstance(value, int) or isinstance(value, bool) or value < 1
+                    ):
+                        errors.append(
+                            _error(
+                                f"{cell_path}.{span}", f"{span} must be an integer of 1 or more"
+                            )
+                        )
                 self._validate_blocks(cell["blocks"], f"{cell_path}.blocks", errors)
 
     def _validate_code(self, block: dict, path: str, errors: list[dict[str, str]]) -> None:
@@ -236,6 +408,12 @@ class Validator:
                     )
             if run.get("link") is not None and not isinstance(run["link"], str):
                 errors.append(_error(f"{run_path}.link", "run link must be a string URL"))
+            if run.get("font") is not None and not isinstance(run["font"], str):
+                errors.append(_error(f"{run_path}.font", "run font must be a font family name"))
+            _check_number(run.get("size"), f"{run_path}.size", "run size", errors, True)
+            _check_number(
+                run.get("letterSpacing"), f"{run_path}.letterSpacing", "run letterSpacing", errors
+            )
             for color_key in ("color", "highlight"):
                 value = run.get(color_key)
                 if value is not None and (

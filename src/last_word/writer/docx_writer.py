@@ -91,6 +91,284 @@ FIXED_DATE_TIME = (1980, 1, 1, 0, 0, 0)
 _DATA_URL_RE = re.compile(r"^data:image/(png|jpe?g);base64,(.+)$", re.DOTALL)
 _HEX6_RE = re.compile(r"^#([0-9A-Fa-f]{6})$")
 
+#: Page sizes in twips (1/1440in), portrait.
+PAGE_SIZES: dict[str, tuple[int, int]] = {
+    "letter": (12240, 15840),
+    "legal": (12240, 20160),
+    "a4": (11906, 16838),
+}
+
+#: Cell margins every table gets unless it says otherwise, in POINTS --
+#: 3 / 5.4 / 3 / 5.4, which is 60 / 108 / 60 / 108 twips. 108 is the value Word
+#: itself uses for default side margins, which is why it reads as an odd number
+#: rather than a round one.
+DEFAULT_CELL_MARGINS_PT: dict[str, float] = {"top": 3, "left": 5.4, "bottom": 3, "right": 5.4}
+
+#: The border every table edge gets unless it says otherwise.
+DEFAULT_BORDER: dict[str, Any] = {"style": "single", "width": 0.5}
+
+TABLE_EDGES = ("top", "left", "bottom", "right", "insideH", "insideV")
+BOX_EDGES = ("top", "left", "bottom", "right")
+
+
+# ─── Units and property fragments ────────────────────────────────────────
+#
+# WordprocessingML measures four different things in four different units, and
+# getting one wrong produces a document that opens fine and is the wrong size.
+# They are collected here, once, so the three engines can be compared line for
+# line:
+#
+#     points -> TWENTIETHS of a point (twips)  spacing, indents, margins
+#     points -> HALF-points                    font size
+#     points -> EIGHTHS of a point             border width
+#     percent -> FIFTIETHS of a percent        table width
+#
+# Suite: fancy-conformance `last-word/docx-constructs`.
+
+
+def _twips(value: Any) -> int | None:
+    """Points -> twips."""
+    return php_int_round(php_float(value) * 20) if is_numeric(value) else None
+
+
+def _half_points(value: Any) -> int | None:
+    """Points -> half-points (w:sz on a run)."""
+    if not is_numeric(value) or php_float(value) <= 0:
+        return None
+    return php_int_round(php_float(value) * 2)
+
+
+def _hex(value: Any) -> str | None:
+    """#RRGGBB -> RRGGBB, upper-cased. Anything else is None."""
+    if not isinstance(value, str):
+        return None
+    match = _HEX6_RE.match(value)
+    return match.group(1).upper() if match is not None else None
+
+
+def _shading_xml(value: Any) -> str:
+    """`<w:shd>` -- the one spelling used for runs, paragraphs and cells alike."""
+    fill = _hex(value)
+    return "" if fill is None else f'<w:shd w:val="clear" w:color="auto" w:fill="{fill}"/>'
+
+
+def _border_edge_xml(tag: str, border: dict[str, Any]) -> str:
+    """One border edge.
+
+    `style: none` becomes `w:val="nil"` with no width and no colour, because nil
+    is the only way to REMOVE a border -- a zero width is not it, and a white
+    one only hides it against a white page.
+    """
+    style = border.get("style") if isinstance(border.get("style"), str) else "single"
+    if style == "none":
+        return f'<w:{tag} w:val="nil"/>'
+    raw = border.get("width")
+    width = php_float(raw) if is_numeric(raw) else 0.5
+    sz = max(2, min(96, php_int_round(width * 8)))
+    color = _hex(border.get("color")) or "auto"
+    return f'<w:{tag} w:val="{style}" w:sz="{sz}" w:space="0" w:color="{color}"/>'
+
+
+def _borders_xml(wrapper: str, borders: Any, edges: tuple[str, ...]) -> str:
+    """A border container in the edge order its CT_ type declares.
+
+    Absent edges are omitted, so a partial `borders` stays partial.
+    """
+    inner = ""
+    if isinstance(borders, dict):
+        for edge in edges:
+            spec = borders.get(edge)
+            if isinstance(spec, dict):
+                inner += _border_edge_xml(edge, spec)
+    return "" if inner == "" else f"<w:{wrapper}>{inner}</w:{wrapper}>"
+
+
+def _margins_xml(wrapper: str, sides: Any) -> str:
+    """A margin container. Sides are twips; a side not given is not emitted."""
+    inner = ""
+    if isinstance(sides, dict):
+        for side in BOX_EDGES:
+            twips = _twips(sides.get(side))
+            if twips is not None:
+                inner += f'<w:{side} w:w="{twips}" w:type="dxa"/>'
+    return "" if inner == "" else f"<w:{wrapper}>{inner}</w:{wrapper}>"
+
+
+def page_geometry(page: Any) -> dict[str, Any]:
+    """Page size and margins in twips."""
+    page = page if isinstance(page, dict) else {}
+    size = page.get("size").lower() if isinstance(page.get("size"), str) else "letter"
+    width, height = PAGE_SIZES.get(size, PAGE_SIZES["letter"])
+
+    orientation = "landscape" if page.get("orientation") == "landscape" else "portrait"
+    if orientation == "landscape":
+        # Swapping the axes without w:orient gives a page that is the right
+        # shape and prints portrait. Both are required.
+        width, height = height, width
+
+    margins = page.get("margins") if isinstance(page.get("margins"), dict) else {}
+
+    def side(key: str) -> int:
+        value = _twips(margins.get(key))
+        return 1440 if value is None else value
+
+    return {
+        "w": width,
+        "h": height,
+        "top": side("top"),
+        "right": side("right"),
+        "bottom": side("bottom"),
+        "left": side("left"),
+        "orientation": orientation,
+    }
+
+
+def split_columns(total: int, count: int, weights: list[float] | None = None) -> list[int]:
+    """Split a width into `count` columns by relative weight.
+
+    Any rounding remainder goes to the LAST column so the grid sums to the
+    content width exactly. Three engines rounding independently is how one
+    language ends up with a table a twip narrower than the other two.
+    """
+    if count < 1:
+        return []
+    values = weights if weights is not None and len(weights) == count else [1.0] * count
+    total_weight = sum(values)
+    if total_weight <= 0:
+        values = [1.0] * count
+        total_weight = float(count)
+
+    out: list[int] = []
+    used = 0
+    for i in range(count - 1):
+        width = php_int_round(total * (values[i] / total_weight))
+        out.append(width)
+        used += width
+    out.append(total - used)
+    return out
+
+
+def _p_pr_xml(block: Any, style: str | None = None, num_pr: str = "") -> str:
+    """Paragraph properties, in CT_PPr order.
+
+    pStyle, keepNext, numPr, pBdr, shd, spacing, ind, jc, outlineLvl.
+    """
+    block = block if isinstance(block, dict) else {}
+    inner = ""
+    if style is not None:
+        inner += f'<w:pStyle w:val="{style}"/>'
+    if php_truthy(block.get("keepNext")):
+        inner += "<w:keepNext/>"
+    inner += num_pr
+
+    inner += _borders_xml("pBdr", block.get("borders"), BOX_EDGES)
+    inner += _shading_xml(block.get("shading"))
+
+    # before, after, line and lineRule all live on ONE w:spacing element;
+    # emitting two would be invalid.
+    spacing = ""
+    before = _twips(block.get("spaceBefore"))
+    if before is not None:
+        spacing += f' w:before="{before}"'
+    after = _twips(block.get("spaceAfter"))
+    if after is not None:
+        spacing += f' w:after="{after}"'
+    line_height = block.get("lineHeight")
+    if is_numeric(line_height) and php_float(line_height) > 0:
+        spacing += f' w:line="{php_int_round(php_float(line_height) * 240)}" w:lineRule="auto"'
+    if spacing != "":
+        inner += f"<w:spacing{spacing}/>"
+
+    ind = ""
+    left = _twips(block.get("indentLeft"))
+    if left is not None:
+        ind += f' w:left="{left}"'
+    right = _twips(block.get("indentRight"))
+    if right is not None:
+        ind += f' w:right="{right}"'
+    if ind != "":
+        inner += f"<w:ind{ind}/>"
+
+    align = block.get("align")
+    if isinstance(align, str) and align != "left":
+        jc = {"center": "center", "right": "right", "justify": "both"}.get(align)
+        if jc is not None:
+            inner += f'<w:jc w:val="{jc}"/>'
+
+    return "" if inner == "" else f"<w:pPr>{inner}</w:pPr>"
+
+
+def _layout_rows(rows: list[dict[str, Any]]) -> tuple[list[list[dict[str, Any]]], int]:
+    """Lay a table's authored rows onto a grid, resolving both merge directions.
+
+    The author writes cells HTML-style: a `rowSpan` cell appears ONCE, and the
+    rows it covers list only their own remaining cells. OOXML has no such
+    shorthand -- every row must carry a cell for every grid column, and a row
+    that is short is a malformed table Word repairs by shifting everything left.
+    So the covered rows get a synthesised `w:vMerge` continuation here.
+    """
+    pending: dict[int, dict[str, Any]] = {}
+    laid: list[list[dict[str, Any]]] = []
+    col_count = 1
+
+    for row in rows:
+        authored = [c for c in _iter_list(row.get("cells")) if isinstance(c, dict)]
+        line: list[dict[str, Any]] = []
+        col = 0
+        nxt = 0
+
+        while True:
+            held = pending.get(col)
+            if held is not None and held["rows"] > 0:
+                # A continuation carries the origin's shading and nothing else:
+                # without the fill the merged block renders striped, and with
+                # the origin's borders it would draw a rule straight through
+                # its own middle.
+                line.append(
+                    {
+                        "cell": {"blocks": []},
+                        "span": held["span"],
+                        "vMerge": "continue",
+                        "shading": held["shading"],
+                    }
+                )
+                held["rows"] -= 1
+                col += held["span"]
+                continue
+
+            if nxt < len(authored):
+                cell = authored[nxt]
+                nxt += 1
+                span = max(1, int(php_float(cell.get("colSpan"))) if is_numeric(cell.get("colSpan")) else 1)
+                row_span = max(1, int(php_float(cell.get("rowSpan"))) if is_numeric(cell.get("rowSpan")) else 1)
+                line.append(
+                    {
+                        "cell": cell,
+                        "span": span,
+                        "vMerge": "restart" if row_span > 1 else None,
+                        "shading": cell.get("shading"),
+                    }
+                )
+                if row_span > 1:
+                    pending[col] = {"rows": row_span - 1, "span": span, "shading": cell.get("shading")}
+                col += span
+                continue
+
+            # Nothing authored left -- but a merge started further right still
+            # owes this row a continuation.
+            ahead = None
+            for at, held2 in pending.items():
+                if at > col and held2["rows"] > 0 and (ahead is None or at < ahead):
+                    ahead = at
+            if ahead is None:
+                break
+            col = ahead
+
+        col_count = max(col_count, col)
+        laid.append(line)
+
+    return laid, col_count
+
 
 class DocxWriter:
     """Mirrors `LastWord\\Writer\\DocxWriter`."""
@@ -104,6 +382,9 @@ class DocxWriter:
         self._image_counter = 0
         # Ordered-list numbering instances allocated (numIds 2..N+1).
         self._ordered_list_count = 0
+        # Twips between the page margins; set from `page` before any block
+        # renders. Table grids are laid out against it.
+        self._content_width = 9360
 
     # ─── Public ──────────────────────────────────────────────────────────
 
@@ -149,7 +430,7 @@ class DocxWriter:
                 )
             )
         parts.append(("word/document.xml", document_xml.encode("utf-8")))
-        parts.append(("word/styles.xml", self._build_styles().encode("utf-8")))
+        parts.append(("word/styles.xml", self._build_styles(doc).encode("utf-8")))
         parts.append(("word/numbering.xml", self._build_numbering().encode("utf-8")))
         parts.append(
             ("word/_rels/document.xml.rels", self._build_document_rels().encode("utf-8"))
@@ -278,14 +559,23 @@ class DocxWriter:
         return xml
 
     def _build_document_xml(self, doc: dict[str, Any]) -> str:
+        page = page_geometry(doc.get("page"))
+        # Table grids are laid out against the section's content width, so it
+        # has to be known before any block renders. Carrying 9360 as a literal
+        # -- which all three engines did -- silently gives a document with
+        # narrowed margins a table that no longer matches its own page.
+        self._content_width = page["w"] - page["left"] - page["right"]
+
         # The title lives in docProps/core.xml (dc:title) -- the cross-language
         # slot -- not in a body paragraph.
         body = self._render_blocks(doc.get("blocks") or [])
 
+        orient = ' w:orient="landscape"' if page["orientation"] == "landscape" else ""
         body += (
             "<w:sectPr>"
-            '<w:pgSz w:w="12240" w:h="15840"/>'
-            '<w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" '
+            f'<w:pgSz w:w="{page["w"]}" w:h="{page["h"]}"{orient}/>'
+            f'<w:pgMar w:top="{page["top"]}" w:right="{page["right"]}" '
+            f'w:bottom="{page["bottom"]}" w:left="{page["left"]}" '
             'w:header="720" w:footer="720" w:gutter="0"/>'
             "</w:sectPr>"
         )
@@ -346,25 +636,21 @@ class DocxWriter:
     def _render_heading(self, block: dict[str, Any]) -> str:
         raw = _nn(block.get("level"), 1)
         level = max(1, min(6, int(php_float(raw)) if is_numeric(raw) else 1))
+        # A heading is a paragraph and takes the same properties. Without that,
+        # a section label that needed spacing or alignment had to be a bold
+        # paragraph impersonating a heading -- and so appeared in no navigation
+        # pane and no table of contents.
         return (
-            f'<w:p><w:pPr><w:pStyle w:val="Heading{level}"/></w:pPr>'
+            "<w:p>"
+            + _p_pr_xml(block, f"Heading{level}")
             + self._render_runs(block.get("runs") or [])
             + "</w:p>"
         )
 
     def _render_paragraph(self, block: dict[str, Any], style_override: str | None = None) -> str:
-        p_pr = ""
-        if style_override is not None:
-            p_pr += f'<w:pStyle w:val="{style_override}"/>'
-        align = block.get("align")
-        if isinstance(align, str) and align != "left":
-            jc = {"center": "center", "right": "right", "justify": "both"}.get(align)
-            if jc is not None:
-                p_pr += f'<w:jc w:val="{jc}"/>'
-
         return (
             "<w:p>"
-            + (f"<w:pPr>{p_pr}</w:pPr>" if p_pr != "" else "")
+            + _p_pr_xml(block, style_override)
             + self._render_runs(block.get("runs") or [])
             + "</w:p>"
         )
@@ -402,45 +688,95 @@ class DocxWriter:
         rows = [row for row in _iter_list(block.get("rows")) if isinstance(row, dict)]
         if not rows:
             return ""
-        col_count = 1
-        for row in rows:
-            cells = row.get("cells")
-            col_count = max(col_count, len(cells) if isinstance(cells, list) else 0)
-        # `intdiv` -- plain truncation, which is `//` for positives.
-        col_width = 9360 // col_count
 
-        xml = (
-            '<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/><w:tblBorders>'
-            '<w:top w:val="single" w:sz="4" w:space="0" w:color="auto"/>'
-            '<w:left w:val="single" w:sz="4" w:space="0" w:color="auto"/>'
-            '<w:bottom w:val="single" w:sz="4" w:space="0" w:color="auto"/>'
-            '<w:right w:val="single" w:sz="4" w:space="0" w:color="auto"/>'
-            '<w:insideH w:val="single" w:sz="4" w:space="0" w:color="auto"/>'
-            '<w:insideV w:val="single" w:sz="4" w:space="0" w:color="auto"/>'
-            "</w:tblBorders></w:tblPr>"
+        laid, col_count = _layout_rows(rows)
+
+        # A table narrower than the text column narrows its grid too: emitting
+        # w:tblW pct while leaving the grid at full width hands Word two
+        # contradictory answers.
+        table_width = self._content_width
+        tbl_w = '<w:tblW w:w="0" w:type="auto"/>'
+        raw_width = block.get("width")
+        if is_numeric(raw_width) and php_float(raw_width) > 0:
+            pct = min(100.0, php_float(raw_width))
+            table_width = php_int_round(self._content_width * (pct / 100))
+            tbl_w = f'<w:tblW w:w="{php_int_round(pct * 50)}" w:type="pct"/>'
+
+        weights: list[float] | None = None
+        raw_widths = block.get("widths")
+        if isinstance(raw_widths, list) and len(raw_widths) == col_count:
+            weights = [php_float(w) if is_numeric(w) else 0.0 for w in raw_widths]
+        grid = split_columns(table_width, col_count, weights)
+
+        tbl_pr = tbl_w
+        align = block.get("align")
+        if isinstance(align, str) and align in ("center", "right"):
+            tbl_pr += f'<w:jc w:val="{align}"/>'
+        borders = block.get("borders")
+        if not isinstance(borders, dict):
+            borders = dict.fromkeys(TABLE_EDGES, DEFAULT_BORDER)
+        tbl_pr += _borders_xml("tblBorders", borders, TABLE_EDGES)
+        if weights is not None:
+            # Without w:tblLayout fixed, Word re-fits columns to their content
+            # and the requested proportions are advisory.
+            tbl_pr += '<w:tblLayout w:type="fixed"/>'
+        padding = block.get("cellPadding")
+        tbl_pr += _margins_xml(
+            "tblCellMar", padding if isinstance(padding, dict) else DEFAULT_CELL_MARGINS_PT
         )
-        xml += "<w:tblGrid>" + f'<w:gridCol w:w="{col_width}"/>' * col_count + "</w:tblGrid>"
 
-        for row in rows:
-            is_header = php_truthy(row.get("header"))
+        xml = f"<w:tbl><w:tblPr>{tbl_pr}</w:tblPr><w:tblGrid>"
+        xml += "".join(f'<w:gridCol w:w="{w}"/>' for w in grid)
+        xml += "</w:tblGrid>"
+
+        for r, line in enumerate(laid):
+            is_header = php_truthy(rows[r].get("header"))
             xml += "<w:tr>"
             if is_header:
                 xml += "<w:trPr><w:tblHeader/></w:trPr>"
-            cells = [c for c in _iter_list(row.get("cells")) if isinstance(c, dict)]
-            for c in range(col_count):
-                # Ragged rows are padded to max(cols); without it the row opens
-                # in Word with cells missing.
-                cell = cells[c] if c < len(cells) else {"blocks": []}
-                tc_pr = f'<w:tcW w:w="{col_width}" w:type="dxa"/>'
-                if is_header:
-                    tc_pr += (
-                        f'<w:shd w:val="clear" w:color="auto" w:fill="{HEADER_FILL}"/>'
-                    )
-                content = self._render_cell_blocks(cell.get("blocks") or [], is_header)
-                xml += f"<w:tc><w:tcPr>{tc_pr}</w:tcPr>{content}</w:tc>"
+            col = 0
+            for slot in line:
+                span = slot["span"]
+                width = sum(grid[i] for i in range(col, min(col + span, len(grid))))
+                col += span
+                xml += "<w:tc>" + self._tc_pr_xml(slot, width, is_header) + "</w:tc>"
             xml += "</w:tr>"
-        xml += "</w:tbl>"
-        return xml
+        return xml + "</w:tbl>"
+
+    def _tc_pr_xml(self, slot: dict[str, Any], width: int, is_header: bool) -> str:
+        """Cell properties, in CT_TcPr order.
+
+        tcW, gridSpan, vMerge, tcBorders, shd, tcMar, vAlign -- followed by the
+        cell's content, which every cell must end with a w:p of.
+        """
+        cell = slot["cell"]
+        span = slot["span"]
+        continuation = slot["vMerge"] == "continue"
+
+        tc_pr = f'<w:tcW w:w="{width}" w:type="dxa"/>'
+        if span > 1:
+            tc_pr += f'<w:gridSpan w:val="{span}"/>'
+        if slot["vMerge"] == "restart":
+            tc_pr += '<w:vMerge w:val="restart"/>'
+        elif continuation:
+            tc_pr += "<w:vMerge/>"
+
+        if not continuation:
+            tc_pr += _borders_xml("tcBorders", cell.get("borders"), BOX_EDGES)
+
+        shading = slot.get("shading")
+        if shading is None and is_header and not continuation:
+            shading = "#" + HEADER_FILL
+        tc_pr += _shading_xml(shading)
+
+        if not continuation:
+            tc_pr += _margins_xml("tcMar", cell.get("padding"))
+            valign = cell.get("valign")
+            if isinstance(valign, str) and valign in ("top", "center", "bottom"):
+                tc_pr += f'<w:vAlign w:val="{valign}"/>'
+
+        content = self._render_cell_blocks(cell.get("blocks") or [], is_header and not continuation)
+        return f"<w:tcPr>{tc_pr}</w:tcPr>{content}"
 
     def _render_cell_blocks(self, blocks: Any, force_bold: bool) -> str:
         """Render cell content; every cell must end with a w:p per OOXML.
@@ -645,38 +981,51 @@ class DocxWriter:
         return xml
 
     def _render_run(self, run: dict[str, Any]) -> str:
-        # rPr children in CT_RPr schema order:
-        # rStyle, rFonts, b, i, strike, color, u, shd
+        # rPr children in CT_RPr schema order -- it is an xsd:sequence, so this
+        # is the schema's order and not a preference:
+        # rStyle, rFonts, b, i, smallCaps, strike, color, spacing, sz, szCs, u, shd
         r_pr = ""
+        font = run.get("font") if isinstance(run.get("font"), str) and run.get("font") != "" else None
         if php_truthy(run.get("code")):
+            # `code` wins over an explicit font: it is the more specific request.
             r_pr += '<w:rStyle w:val="InlineCode"/>'
-            r_pr += '<w:rFonts w:ascii="Consolas" w:hAnsi="Consolas" w:cs="Consolas"/>'
+            font = "Consolas"
         elif isinstance(run.get("link"), str) and run["link"] != "":
             r_pr += '<w:rStyle w:val="Hyperlink"/>'
+        if font is not None:
+            # Three attributes, not one: with only w:ascii, Word picks its own
+            # face for anything it classes as high-ANSI or complex-script and
+            # one run renders in two fonts.
+            f = xml_attr(font)
+            r_pr += f'<w:rFonts w:ascii="{f}" w:hAnsi="{f}" w:cs="{f}"/>'
         if php_truthy(run.get("bold")):
             r_pr += "<w:b/>"
         if php_truthy(run.get("italic")):
             r_pr += "<w:i/>"
+        if php_truthy(run.get("smallCaps")):
+            r_pr += "<w:smallCaps/>"
         if php_truthy(run.get("strike")):
             r_pr += "<w:strike/>"
-        color = run.get("color")
-        if isinstance(color, str):
-            match = _HEX6_RE.match(color)
-            if match is not None:
-                r_pr += f'<w:color w:val="{match.group(1).upper()}"/>'
+        color = _hex(run.get("color"))
+        if color is not None:
+            r_pr += f'<w:color w:val="{color}"/>'
+        # Tracking of zero is already the default, so it is absent rather than
+        # w:val="0" -- otherwise every untracked run would differ from the same
+        # run written before this feature existed. Negative is legal, and is
+        # how a large display size gets tightened.
+        tracking = run.get("letterSpacing")
+        if is_numeric(tracking) and php_float(tracking) != 0.0:
+            r_pr += f'<w:spacing w:val="{_twips(tracking)}"/>'
+        size = _half_points(run.get("size"))
+        if size is not None:
+            # szCs is not decoration: omit it and a complex-script run silently
+            # keeps the default size.
+            r_pr += f'<w:sz w:val="{size}"/><w:szCs w:val="{size}"/>'
         if php_truthy(run.get("underline")):
             r_pr += '<w:u w:val="single"/>'
-        highlight = run.get("highlight")
-        if isinstance(highlight, str):
-            match = _HEX6_RE.match(highlight)
-            if match is not None:
-                # Exact-hex highlight via run shading -- w:highlight only takes
-                # named colors; the reader maps both back to `highlight`.
-                r_pr += (
-                    '<w:shd w:val="clear" w:color="auto" w:fill="'
-                    + match.group(1).upper()
-                    + '"/>'
-                )
+        # Exact-hex highlight via run shading -- w:highlight only takes named
+        # colors; the reader maps both back to `highlight`.
+        r_pr += _shading_xml(run.get("highlight"))
 
         text = php_str(run.get("text", "")).replace("\r\n", "\n")
         body = ""
@@ -693,16 +1042,21 @@ class DocxWriter:
     # ─── Static parts ────────────────────────────────────────────────────
 
     @staticmethod
-    def _build_styles() -> str:
+    def _build_styles(doc: dict[str, Any] | None = None) -> str:
         heading_sizes = {1: 36, 2: 32, 3: 28, 4: 26, 5: 24, 6: 22}
+        doc = doc or {}
+
+        raw_font = doc.get("defaultFont")
+        font = xml_attr(raw_font) if isinstance(raw_font, str) and raw_font != "" else "Calibri"
+        size = _half_points(doc.get("defaultSize")) or 22
 
         xml = xml_declaration()
         xml += f'<w:styles xmlns:w="{NS_W}">'
         xml += (
             "<w:docDefaults>"
             "<w:rPrDefault><w:rPr>"
-            '<w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:cs="Calibri"/>'
-            '<w:sz w:val="22"/><w:szCs w:val="22"/>'
+            f'<w:rFonts w:ascii="{font}" w:hAnsi="{font}" w:eastAsia="{font}" w:cs="{font}"/>'
+            f'<w:sz w:val="{size}"/><w:szCs w:val="{size}"/>'
             "</w:rPr></w:rPrDefault>"
             "<w:pPrDefault><w:pPr>"
             '<w:spacing w:after="160" w:line="259" w:lineRule="auto"/>'

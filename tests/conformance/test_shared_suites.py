@@ -8,6 +8,13 @@ Two of the suites in that repository pin functions this package implements:
 - `shared/image-header` -- `sniffImageSize`, the PNG/JPEG header read that
   sizes an image whose model omits `widthPx`/`heightPx`.
 
+The loader is now the one `fancy-conformance` ships, not the private copy this
+repository used to carry. That copy is deleted: the fixture package's own
+AGENTS.md asks each consumer to drop its own the next time it is touched,
+because two of the four that existed read a case's `skip` as a scalar rather
+than a map keyed by language -- so a row skipped for PHP skipped on Python too,
+and the log still read green.
+
 Four rules from `runners/README.md`, all honoured:
 
 1. Run on every push and PR -- not nightly, not at release.
@@ -24,12 +31,12 @@ import pytest
 
 from last_word.helpers.image_size import sniff
 from last_word.helpers.php import php_int_round
-from tests.conformance import loader
+import fancy_conformance as loader
 
 # The fixture set this port was written against. Asserted, not merely printed:
 # "we are on an old fixture set" should be visible in the log rather than
 # inferred months later.
-PINNED_SUITE_VERSION = "0.5.0"
+PINNED_SUITE_VERSION = "0.7.0"
 
 
 def test_the_pinned_fixture_version_is_the_one_on_disk() -> None:

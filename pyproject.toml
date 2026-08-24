@@ -35,6 +35,16 @@ dependencies = []
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
 
+[dependency-groups]
+# `fancy-conformance` is the shared FIXTURE package -- first-party, zero runtime
+# dependencies of its own, and TEST-ONLY, so it never reaches published
+# metadata. It is not on PyPI; it is checked out beside this repository in the
+# .agi envelope, and CI checks it out explicitly.
+test = ["pytest>=8.0", "fancy-conformance"]
+
+[tool.uv.sources]
+fancy-conformance = { path = "../fancy-conformance/python", editable = true }
+
 [project.urls]
 Homepage = "https://github.com/Particle-Academy/last-word-py"
 Repository = "https://github.com/Particle-Academy/last-word-py"
@@ -47,6 +57,11 @@ packages = ["src/last_word"]
 # `pythonpath` rather than an editable install: the suite must run on a bare
 # checkout with nothing but pytest, the same way `npm test` does for the Node
 # mirror.
-pythonpath = ["src"]
+#
+# The shared fixture loader is on the path the same way, so the private copy
+# this repository used to carry could be deleted -- `fancy-conformance`'s own
+# AGENTS.md asks each consumer to drop its copy the next time it is touched,
+# because two of the four that existed had the same silent `skip` bug.
+pythonpath = ["src", "../fancy-conformance/python/src"]
 testpaths = ["tests"]
 addopts = "-ra"

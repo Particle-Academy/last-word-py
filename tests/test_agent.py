@@ -15,8 +15,22 @@ def test_exports_a_json_schema_for_llm_tool_registration() -> None:
 
     assert schema["type"] == "object"
     assert schema["required"] == ["blocks"]
-    assert set(schema["properties"]) == {"title", "blocks"}
-    assert set(schema["$defs"]) == {"run", "listItem", "block"}
+    assert set(schema["properties"]) == {
+        "title",
+        "blocks",
+        "page",
+        "defaultFont",
+        "defaultSize",
+    }
+    assert set(schema["$defs"]) == {
+        "run",
+        "listItem",
+        "border",
+        "boxBorders",
+        "tableBorders",
+        "boxSides",
+        "block",
+    }
     assert len(schema["$defs"]["block"]["oneOf"]) == len(Schema.BLOCK_TYPES)
 
     # Must be JSON-serializable as-is: it goes straight into a tool definition.

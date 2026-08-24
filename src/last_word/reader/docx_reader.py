@@ -52,8 +52,8 @@ import zipfile
 from typing import Any
 from xml.etree import ElementTree as ET
 
-from ..helpers.php import is_numeric, php_int_round
-from ..writer.docx_writer import SDT_TAG_CODE, SDT_TAG_QUOTE
+from ..helpers.php import is_numeric, php_float, php_int_round, php_round
+from ..writer.docx_writer import SDT_TAG_CODE, SDT_TAG_QUOTE, split_columns
 
 #: w:highlight named colors -> hex.
 HIGHLIGHT_COLORS: dict[str, str] = {
@@ -108,6 +108,182 @@ _SKIPPED_INLINE = frozenset(
 )
 
 
+#: Faces that mean `code` rather than a font choice. Word-authored files mark
+#: inline code by picking a monospace family and nothing else, so the reader has
+#: to recognise the family; the writer's own output is unambiguous.
+MONO_FONTS = ("consolas", "courier new", "courier", "menlo", "monaco", "source code pro")
+
+#: The header-cell grey, shared with the writer and both sibling engines.
+HEADER_FILL = "E7E7E7"
+
+#: Box edges, in the order every CT_ border and margin type declares them.
+BOX_EDGES = ("top", "left", "bottom", "right")
+
+TABLE_EDGES = ("top", "left", "bottom", "right", "insideH", "insideV")
+
+#: Page sizes in twips, portrait -- mirrors the writer's table.
+PAGE_SIZES = {
+    "letter": (12240, 15840),
+    "legal": (12240, 20160),
+    "a4": (11906, 16838),
+}
+
+
+def _points_from(raw: float, per_point: float, digits: int = 3) -> float | int:
+    """A raw OOXML measure back into points, kept exact for halves.
+
+    ``php_round``, never the builtin: Python rounds half to even and the two
+    peers round half away from zero, which is a silent one-unit disagreement on
+    exactly the values a fixture picks.
+    """
+    scale = 10**digits
+    value = php_round(raw / per_point * scale) / scale
+    return int(value) if value == int(value) else value
+
+
+def _parse_border_edge(edge: ET.Element | None) -> dict[str, Any] | None:
+    """One border edge back into the model.
+
+    Defaults are NOT surfaced: ``style`` only when it is not ``single``,
+    ``color`` only when it is not ``auto``. Otherwise reading a document written
+    from a model returns a bigger model than went in, and writing that model
+    back produces a different file.
+    """
+    if edge is None:
+        return None
+    val = _w_attr(edge, "val") or "single"
+    if val in ("nil", "none"):
+        return {"style": "none"}
+    out: dict[str, Any] = {}
+    if val != "single":
+        out["style"] = val
+    sz = _w_attr(edge, "sz")
+    if is_numeric(sz):
+        out["width"] = _points_from(php_float(sz), 8)
+    color = _w_attr(edge, "color")
+    if isinstance(color, str) and _HEX6_BARE.match(color) is not None:
+        out["color"] = "#" + color.upper()
+    return out
+
+
+def _parse_borders(container: ET.Element | None, edges: tuple[str, ...]) -> dict[str, Any] | None:
+    if container is None:
+        return None
+    out: dict[str, Any] = {}
+    for edge in edges:
+        border = _parse_border_edge(_first_child_by_name(container, edge))
+        if border is not None:
+            out[edge] = border
+    return out or None
+
+
+def _parse_sides(container: ET.Element | None) -> dict[str, Any] | None:
+    """A margin container (``w:tblCellMar``, ``w:tcMar``) back into points."""
+    if container is None:
+        return None
+    out: dict[str, Any] = {}
+    for side in BOX_EDGES:
+        node = _first_child_by_name(container, side)
+        if node is None:
+            continue
+        w = _w_attr(node, "w")
+        if is_numeric(w):
+            out[side] = _points_from(php_float(w), 20)
+    return out or None
+
+
+def _is_default_table_borders(borders: dict[str, Any]) -> bool:
+    """Is this exactly what the writer emits for a table that asked for nothing?
+
+    Not a tolerance and not a heuristic: the writer's defaults are a fixed set,
+    and anything differing by one edge or one twip is the author's and must
+    survive the read. The default edge is single / 0.5pt / auto, which reads
+    back as width alone -- style and colour are both the omitted default.
+    """
+    return len(borders) == len(TABLE_EDGES) and all(
+        borders.get(edge) == {"width": 0.5} for edge in TABLE_EDGES
+    )
+
+
+def _is_default_cell_margins(sides: dict[str, Any]) -> bool:
+    return sides == {"top": 3, "left": 5.4, "bottom": 3, "right": 5.4}
+
+
+def _parse_page(sect_pr: ET.Element | None) -> dict[str, Any] | None:
+    """Section geometry back into the model, defaults omitted."""
+    if sect_pr is None:
+        return None
+    out: dict[str, Any] = {}
+
+    pg_sz = _first_child_by_name(sect_pr, "pgSz")
+    raw_w = _w_attr(pg_sz, "w") if pg_sz is not None else None
+    raw_h = _w_attr(pg_sz, "h") if pg_sz is not None else None
+    width = int(php_float(raw_w)) if is_numeric(raw_w) else 12240
+    height = int(php_float(raw_h)) if is_numeric(raw_h) else 15840
+    if pg_sz is not None and _w_attr(pg_sz, "orient") == "landscape":
+        out["orientation"] = "landscape"
+        width, height = height, width
+    for name, (pw, ph) in PAGE_SIZES.items():
+        if pw == width and ph == height and name != "letter":
+            out["size"] = name
+
+    pg_mar = _first_child_by_name(sect_pr, "pgMar")
+    margins: dict[str, Any] = {}
+    if pg_mar is not None:
+        for side in BOX_EDGES:
+            value = _w_attr(pg_mar, side)
+            if is_numeric(value) and int(php_float(value)) != 1440:
+                margins[side] = _points_from(php_float(value), 20)
+    if margins:
+        out["margins"] = margins
+
+    return out or None
+
+
+def _parse_paragraph_properties(p_pr: ET.Element | None) -> dict[str, Any]:
+    """Paragraph properties back into the model.
+
+    The same set ``paragraph``, ``heading`` and a list item all accept.
+    ``align`` is left to the caller, which already computed it.
+    """
+    if p_pr is None:
+        return {}
+    out: dict[str, Any] = {}
+
+    spacing = _first_child_by_name(p_pr, "spacing")
+    if spacing is not None:
+        for attr, key in (("before", "spaceBefore"), ("after", "spaceAfter")):
+            value = _w_attr(spacing, attr)
+            if is_numeric(value):
+                out[key] = _points_from(php_float(value), 20)
+        line = _w_attr(spacing, "line")
+        if is_numeric(line) and _w_attr(spacing, "lineRule") == "auto":
+            out["lineHeight"] = _points_from(php_float(line), 240)
+
+    ind = _first_child_by_name(p_pr, "ind")
+    if ind is not None:
+        for attr, key in (("left", "indentLeft"), ("right", "indentRight")):
+            value = _w_attr(ind, attr)
+            if is_numeric(value):
+                out[key] = _points_from(php_float(value), 20)
+
+    keep_next = _first_child_by_name(p_pr, "keepNext")
+    if keep_next is not None and _toggle_on(_w_attr(keep_next, "val")):
+        out["keepNext"] = True
+
+    shd = _first_child_by_name(p_pr, "shd")
+    if shd is not None:
+        fill = _w_attr(shd, "fill")
+        if isinstance(fill, str) and _HEX6_BARE.match(fill) is not None:
+            out["shading"] = "#" + fill.upper()
+
+    borders = _parse_borders(_first_child_by_name(p_pr, "pBdr"), BOX_EDGES)
+    if borders is not None:
+        out["borders"] = borders
+
+    return out
+
+
 def _local(tag: Any) -> str:
     """Local name of an ElementTree tag (`{ns}name` -> `name`)."""
     if not isinstance(tag, str):
@@ -141,6 +317,7 @@ class DocxReader:
         # zip entry name (without leading word/) -> bytes, for media resolution.
         self._media: dict[str, bytes] = {}
         self._core_xml: bytes | None = None
+        self._styles_xml: bytes | None = None
         self._title: str | None = None
 
     # ─── Public ──────────────────────────────────────────────────────────
@@ -164,8 +341,41 @@ class DocxReader:
         doc: dict[str, Any] = {}
         if self._title is not None and self._title != "":
             doc["title"] = self._title
+
+        # Section geometry and document defaults are surfaced ONLY when they
+        # differ from what the writer produces unasked, for the same reason
+        # table options are: a Letter portrait page at one-inch margins is what
+        # every document written before `page` existed contains.
+        page = _parse_page(_first_child_by_name(body, "sectPr")) if body is not None else None
+        if page is not None:
+            doc["page"] = page
+        doc.update(self._parse_doc_defaults())
+
         doc["blocks"] = blocks
         return doc
+
+    def _parse_doc_defaults(self) -> dict[str, Any]:
+        """`defaultFont` / `defaultSize` from styles.xml, defaults omitted."""
+        if self._styles_xml is None:
+            return {}
+        root = _parse_xml(self._styles_xml)
+        if root is None:
+            return {}
+        r_pr_default = _first_descendant_by_name(root, "rPrDefault")
+        r_pr = _first_child_by_name(r_pr_default, "rPr") if r_pr_default is not None else None
+        if r_pr is None:
+            return {}
+
+        out: dict[str, Any] = {}
+        r_fonts = _first_child_by_name(r_pr, "rFonts")
+        ascii_font = _w_attr(r_fonts, "ascii") if r_fonts is not None else None
+        if isinstance(ascii_font, str) and ascii_font not in ("", "Calibri"):
+            out["defaultFont"] = ascii_font
+        sz = _first_child_by_name(r_pr, "sz")
+        val = _w_attr(sz, "val") if sz is not None else None
+        if is_numeric(val) and int(php_float(val)) != 22:
+            out["defaultSize"] = _points_from(php_float(val), 2)
+        return out
 
     # ─── Archive ─────────────────────────────────────────────────────────
 
@@ -200,6 +410,9 @@ class DocxReader:
 
             self._core_xml = (
                 archive.read("docProps/core.xml") if "docProps/core.xml" in names else None
+            )
+            self._styles_xml = (
+                archive.read("word/styles.xml") if "word/styles.xml" in names else None
             )
 
             self._media = {}
@@ -400,11 +613,20 @@ class DocxReader:
                 level = min(p["outlineLvl"] + 1, 6)
 
             if level is not None and has_text:
-                blocks.append({"type": "heading", "level": level, "runs": p["runs"]})
+                heading: dict[str, Any] = {
+                    "type": "heading",
+                    "level": level,
+                    "runs": p["runs"],
+                }
+                if p["align"] is not None:
+                    heading["align"] = p["align"]
+                heading.update(p["props"])
+                blocks.append(heading)
             elif has_text or (p["runs"] and not p["images"]):
                 para = {"type": "paragraph", "runs": p["runs"]}
                 if p["align"] is not None:
                     para["align"] = p["align"]
+                para.update(p["props"])
                 blocks.append(para)
             elif not has_text and not p["images"] and p["bottomBorder"]:
                 blocks.append({"type": "hr"})
@@ -548,10 +770,12 @@ class DocxReader:
 
         state: dict[str, Any] = {"pageBreak": False, "images": []}
         runs = self._parse_inline_container(p, None, state)
+        props = _parse_paragraph_properties(p_pr)
 
         return {
             "style": style,
             "align": align,
+            "props": props,
             "outlineLvl": outline_lvl,
             "numPr": num_pr,
             "bottomBorder": bottom_border,
@@ -635,15 +859,18 @@ class DocxReader:
             return None
 
         run: dict[str, Any] = {"text": text}
-        for flag in ("bold", "italic", "underline", "strike", "code"):
+        for flag in ("bold", "italic", "underline", "strike", "code", "smallCaps"):
             if props.get(flag):
                 run[flag] = True
         if link is not None and link != "":
             run["link"] = link
-        if "color" in props:
-            run["color"] = props["color"]
-        if "highlight" in props:
-            run["highlight"] = props["highlight"]
+        # Every non-boolean run property, listed once. A key missing from here
+        # is read out of the XML and then dropped on the floor -- which is
+        # exactly how `size`, `font` and `letterSpacing` were invisible on the
+        # way back before this list grew.
+        for key in ("color", "highlight", "size", "font", "letterSpacing"):
+            if key in props:
+                run[key] = props[key]
         return run
 
     @staticmethod
@@ -681,6 +908,28 @@ class DocxReader:
             elif name == "rStyle":
                 if val == "InlineCode":
                     props["code"] = True
+            elif name == "smallCaps":
+                if _toggle_on(val):
+                    props["smallCaps"] = True
+            elif name == "sz":
+                if is_numeric(val):
+                    props["size"] = _points_from(php_float(val), 2)
+            elif name == "spacing":
+                # Tracking of zero is the writer's "absent", so a zero here
+                # would be a property nobody asked for.
+                if is_numeric(val) and php_float(val) != 0.0:
+                    props["letterSpacing"] = _points_from(php_float(val), 20)
+            elif name == "rFonts":
+                ascii_font = _w_attr(node, "ascii")
+                if isinstance(ascii_font, str) and ascii_font != "":
+                    props["font"] = ascii_font
+
+        # A `code` run's Consolas came FROM `code`, so surfacing it as `font`
+        # too would hand back a bigger model than went in -- and the next write
+        # would then differ from the one just read.
+        if isinstance(props.get("font"), str) and props["font"].lower() in MONO_FONTS:
+            props["code"] = True
+            del props["font"]
 
         # The InlineCode style's own shading is presentation, not a highlight.
         if props.get("code") and props.get("highlight", "").upper() == "#F2F2F2":
@@ -693,33 +942,143 @@ class DocxReader:
     def _parse_table(
         self, tbl: ET.Element, inside_quote: bool = False, depth: int = 0
     ) -> dict[str, Any]:
-        rows: list[dict[str, Any]] = []
+        """A table back into the model.
+
+        Two things make this the hardest read in the package. First, the writer
+        emits borders, cell margins and a ``w:tcW`` for every cell whether or
+        not the model asked -- so anything it would have produced anyway is NOT
+        surfaced, or every document written before these options existed would
+        come back carrying options nobody set. Second, the file contains the
+        ``w:vMerge`` continuation cells the writer synthesised, and they have to
+        be dropped and turned back into a ``rowSpan`` on the cell above.
+        """
+        tbl_pr = _first_child_by_name(tbl, "tblPr")
+        table: dict[str, Any] = {"type": "table"}
+
+        grid: list[int] = []
+        tbl_grid = _first_child_by_name(tbl, "tblGrid")
+        if tbl_grid is not None:
+            for col_node in list(tbl_grid):
+                if _local(col_node.tag) == "gridCol":
+                    raw = _w_attr(col_node, "w")
+                    grid.append(int(php_float(raw)) if is_numeric(raw) else 0)
+
+        if tbl_pr is not None:
+            tbl_w = _first_child_by_name(tbl_pr, "tblW")
+            if tbl_w is not None and _w_attr(tbl_w, "type") == "pct":
+                w = _w_attr(tbl_w, "w")
+                if is_numeric(w):
+                    table["width"] = _points_from(php_float(w), 50, 2)
+            jc = _first_child_by_name(tbl_pr, "jc")
+            if jc is not None and _w_attr(jc, "val") in ("center", "right"):
+                table["align"] = _w_attr(jc, "val")
+            borders = _parse_borders(_first_child_by_name(tbl_pr, "tblBorders"), TABLE_EDGES)
+            if borders is not None and not _is_default_table_borders(borders):
+                table["borders"] = borders
+            padding = _parse_sides(_first_child_by_name(tbl_pr, "tblCellMar"))
+            if padding is not None and not _is_default_cell_margins(padding):
+                table["cellPadding"] = padding
+
+        # Weights are only surfaced when the grid is NOT what an equal split
+        # would have produced -- compared against the split the writer computes,
+        # not tested for exact equality, so a three-column table whose width
+        # does not divide by three is still recognised as equal.
+        total = sum(grid)
+        if grid and total > 0 and grid != split_columns(total, len(grid)):
+            table["widths"] = [_points_from(w * 10000 / total, 100, 2) for w in grid]
+
+        # Pass 1: read every emitted cell, keeping its grid column and merge
+        # state.
+        laid: list[list[dict[str, Any]]] = []
+        headers: list[bool] = []
         for node in list(tbl):
             if _local(node.tag) != "tr":
                 continue
-            header = False
             tr_pr = _first_child_by_name(node, "trPr")
-            if tr_pr is not None and _first_child_by_name(tr_pr, "tblHeader") is not None:
-                header = True
-            cells: list[dict[str, Any]] = []
+            header = tr_pr is not None and _first_child_by_name(tr_pr, "tblHeader") is not None
+            headers.append(header)
+
+            slots: list[dict[str, Any]] = []
+            col = 0
             for tc in list(node):
-                if _local(tc.tag) == "tc":
-                    # The writer pads cells/tables with empty paragraphs to
-                    # satisfy OOXML; _parse_block_container already drops
-                    # content-free paragraphs, so this is what remains.
-                    cells.append(
-                        {
-                            "blocks": self._parse_block_container(
-                                tc, False, inside_quote, depth + 1
-                            )
-                        }
-                    )
+                if _local(tc.tag) != "tc":
+                    continue
+                tc_pr = _first_child_by_name(tc, "tcPr")
+                span = 1
+                v_merge: str | None = None
+                if tc_pr is not None:
+                    grid_span = _first_child_by_name(tc_pr, "gridSpan")
+                    if grid_span is not None and is_numeric(_w_attr(grid_span, "val")):
+                        span = max(1, int(php_float(_w_attr(grid_span, "val"))))
+                    v_merge_node = _first_child_by_name(tc_pr, "vMerge")
+                    if v_merge_node is not None:
+                        v_merge = _w_attr(v_merge_node, "val") or "continue"
+
+                cell: dict[str, Any] | None = None
+                if v_merge != "continue":
+                    cell = {
+                        "blocks": self._parse_block_container(tc, False, inside_quote, depth + 1)
+                    }
+                    if tc_pr is not None:
+                        shd = _first_child_by_name(tc_pr, "shd")
+                        fill = _w_attr(shd, "fill") if shd is not None else None
+                        # A header row's grey came FROM `header`, so it is
+                        # attributable and not surfaced. Any other fill is the
+                        # author's.
+                        if (
+                            isinstance(fill, str)
+                            and _HEX6_BARE.match(fill) is not None
+                            and not (header and fill.upper() == HEADER_FILL)
+                        ):
+                            cell["shading"] = "#" + fill.upper()
+                        cell_borders = _parse_borders(
+                            _first_child_by_name(tc_pr, "tcBorders"), BOX_EDGES
+                        )
+                        if cell_borders is not None:
+                            cell["borders"] = cell_borders
+                        cell_padding = _parse_sides(_first_child_by_name(tc_pr, "tcMar"))
+                        if cell_padding is not None:
+                            cell["padding"] = cell_padding
+                        v_align = _first_child_by_name(tc_pr, "vAlign")
+                        if v_align is not None and _w_attr(v_align, "val") in (
+                            "top",
+                            "center",
+                            "bottom",
+                        ):
+                            cell["valign"] = _w_attr(v_align, "val")
+                    if span > 1:
+                        cell["colSpan"] = span
+
+                slots.append({"col": col, "span": span, "vMerge": v_merge, "cell": cell})
+                col += span
+            laid.append(slots)
+
+        # Pass 2: fold each run of continuations back into the cell that
+        # started it.
+        for r, line in enumerate(laid):
+            for slot in line:
+                if slot["vMerge"] != "restart" or slot["cell"] is None:
+                    continue
+                covered = 1
+                for below in range(r + 1, len(laid)):
+                    if not any(
+                        s["col"] == slot["col"] and s["vMerge"] == "continue" for s in laid[below]
+                    ):
+                        break
+                    covered += 1
+                if covered > 1:
+                    slot["cell"]["rowSpan"] = covered
+
+        rows: list[dict[str, Any]] = []
+        for r, line in enumerate(laid):
             row: dict[str, Any] = {}
-            if header:
+            if headers[r]:
                 row["header"] = True
-            row["cells"] = cells
+            row["cells"] = [s["cell"] for s in line if s["cell"] is not None]
             rows.append(row)
-        return {"type": "table", "rows": rows}
+
+        table["rows"] = rows
+        return table
 
     # ─── Images ──────────────────────────────────────────────────────────
 
