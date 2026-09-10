@@ -32,6 +32,33 @@ from .schema.schema import Schema
 from .schema.validator import Validator
 from .writer.docx_writer import DocxWriter
 
+
+def _installed_version() -> str:
+    """This package's version, read from the INSTALLED distribution metadata.
+
+    Not a literal. A literal here is a second copy of a number that already
+    lives in ``pyproject.toml``, and the two drift with nothing comparing them.
+    That is not hypothetical in this estate: ``fancy-flow-py`` shipped
+    ``__version__ = "0.1.0"`` against a 0.4.0 distribution for three releases,
+    and the runtime's first outside consumer installed 0.4.0, read 0.1.0, and
+    reported it.
+
+    Reading from metadata removes the second copy rather than re-syncing it, so
+    there is nothing left to drift. The fallback covers a source tree that was
+    never installed — a case where ``pyproject.toml`` is the only truth and no
+    distribution exists to disagree with it.
+    """
+    from importlib.metadata import PackageNotFoundError
+    from importlib.metadata import version as _distribution_version
+
+    try:
+        return _distribution_version("fancy-last-word")
+    except PackageNotFoundError:  # pragma: no cover — an uninstalled source tree
+        return "0.0.0+unknown"
+
+
+VERSION = _installed_version()
+
 _ZIP_SIGNATURE = b"PK\x03\x04"
 
 # PCRE's `\s` without the /u modifier is ASCII-only, and PHP's word count leans
@@ -200,8 +227,18 @@ def json_schema() -> dict[str, Any]:
 
 
 def version() -> str:
-    """Package version."""
-    return Schema.VERSION
+    """This PACKAGE's version.
+
+    It used to return ``Schema.VERSION``, which is the version of the document
+    MODEL — a separate number that moves when the shape of a ``Doc`` changes,
+    not when the package ships. Tying them meant the two could only agree by
+    coincidence, and the PHP and Node twins had already drifted apart on exactly
+    that (``last-word`` reported 0.2.0 from a 0.4.x release).
+
+    ``Schema.VERSION`` still exists and still means what it says; ask for it by
+    name when you want the model version.
+    """
+    return VERSION
 
 
 # ─── Word counting ───────────────────────────────────────────────────────

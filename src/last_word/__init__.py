@@ -47,7 +47,7 @@ from .schema.schema import Schema
 from .schema.validator import Validator
 from .writer.docx_writer import DocxWriter
 
-__version__ = Schema.VERSION
+__version__ = version()
 
 __all__ = [
     # The Agent surface

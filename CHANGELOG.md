@@ -11,6 +11,11 @@ minor.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`version()` returns the PACKAGE version, not the schema's.** It returned `Schema.VERSION` — the version of the document MODEL, which moves when the shape of a `Doc` changes rather than when the package ships — so the two could only agree by coincidence. The PHP twin had already drifted apart on exactly this (reporting 0.2.0 from a 0.4.x release). `Schema.VERSION` still exists and still means what it says. `__version__` now reads the installed distribution metadata.
+
+
 ### Added
 
 - **A rich-layout surface, so a business one-pager is expressible.** The model
