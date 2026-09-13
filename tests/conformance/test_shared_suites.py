@@ -51,7 +51,11 @@ import fancy_conformance as loader
 PINNED_SUITE_VERSION = "0.22.0"
 
 
-def test_the_pinned_fixture_version_is_the_one_on_disk() -> None:
+def test_the_pinned_fixture_version_is_the_one_on_disk(capsys: pytest.CaptureFixture[str]) -> None:
+    # Past pytest's capture: a bare print() in a passing test never reaches the
+    # CI log, and the runner rules require the version to be visible there.
+    with capsys.disabled():
+        print(f"\nfancy-conformance on disk: {loader.version()}, pinned: {PINNED_SUITE_VERSION}")
     assert loader.version() == PINNED_SUITE_VERSION, (
         f"fancy-conformance is at {loader.version()}, this port pins "
         f"{PINNED_SUITE_VERSION}. Re-run the suites and move the pin deliberately."
@@ -140,15 +144,17 @@ def test_ci_checks_out_the_fixture_tag_this_suite_pins() -> None:
         )
 
 
-def _summary(suite: str, run_case) -> dict:
+def _summary(suite: str, run_case, capsys: pytest.CaptureFixture[str]) -> dict:
     summary = loader.run_table(suite, run_case)
-    # Printed unconditionally. A bare "3 skipped" in a log reads identically to
-    # full coverage at a glance, so every skip is named with its reason.
-    print("\n" + loader.format_summary(summary))
+    # Printed unconditionally, and past pytest's capture: a bare print() in a
+    # passing test never reached the CI log, so a skip could not be read there
+    # at all. Every skip is named with its reason.
+    with capsys.disabled():
+        print("\n" + loader.format_summary(summary))
     return summary
 
 
-def test_round_money_matches_the_shared_decimal_table() -> None:
+def test_round_money_matches_the_shared_decimal_table(capsys: pytest.CaptureFixture[str]) -> None:
     rows = [c for c in loader.cases("shared/decimal") if c.get("fn") == "roundMoney"]
 
     # The guard the sibling suites lacked. If the suite renamed the function,
@@ -164,16 +170,17 @@ def test_round_money_matches_the_shared_decimal_table() -> None:
         # excluded from the assertion below, and the count guard above is what
         # keeps this file honest.
         else c["expected"],
+        capsys,
     )
     assert summary["ok"], loader.format_summary(summary)
 
 
-def test_image_header_matches_the_shared_table() -> None:
+def test_image_header_matches_the_shared_table(capsys: pytest.CaptureFixture[str]) -> None:
     def run(case: dict) -> dict | None:
         raw = base64.b64decode(case["input"]["base64"])
         return sniff(raw)
 
-    summary = _summary("shared/image-header", run)
+    summary = _summary("shared/image-header", run, capsys)
     assert summary["passed"] >= 14, "the image-header table barely ran"
     assert summary["ok"], loader.format_summary(summary)
 

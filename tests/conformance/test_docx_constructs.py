@@ -18,6 +18,7 @@ from typing import Any
 from xml.etree import ElementTree as ET
 
 import fancy_conformance as conformance
+import pytest
 
 import last_word
 
@@ -121,11 +122,13 @@ def _extract(case: dict[str, Any]) -> Any:
     return EXTRACTORS[fn](case["input"]["doc"])
 
 
-def test_runs_every_row_in_the_shared_table() -> None:
+def test_runs_every_row_in_the_shared_table(capsys: pytest.CaptureFixture[str]) -> None:
     summary = conformance.run_table(SUITE, _extract, language="python")
     # Printed unconditionally: a bare "3 skipped" in a log reads identically to
-    # full coverage at a glance, so every skip is named with its reason.
-    print("\n" + conformance.format_summary(summary))
+    # full coverage at a glance, so every skip is named with its reason. Past
+    # pytest's capture, or a passing test's print() never reaches the CI log.
+    with capsys.disabled():
+        print("\n" + conformance.format_summary(summary))
     assert summary["ok"], "\n" + conformance.format_summary(summary)
 
 
