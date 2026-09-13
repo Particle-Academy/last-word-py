@@ -61,10 +61,17 @@ jobs:
           repository: Particle-Academy/last-word
           path: .php-last-word
 
+      # The TAG this suite pins (PINNED_SUITE_VERSION in
+      # tests/conformance/test_shared_suites.py), never `main`. The pin is the
+      # contract: moving it is a deliberate commit here, never a side effect of
+      # someone else's release. With no `ref`, every fixture release turned this
+      # build red for a reason no commit in this repository caused, and it sat
+      # red for weeks. A test fails if this ref and the pin disagree.
       - name: Check out fancy-conformance
         uses: actions/checkout@v4
         with:
           repository: Particle-Academy/fancy-conformance
+          ref: v0.22.0
           path: .fancy-conformance
 
       - name: Install
