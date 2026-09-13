@@ -43,7 +43,7 @@ import fancy_conformance as loader
 # Five ports had drifted to a pin this stale at once, which says the failure is
 # structural rather than anyone forgetting: the pin only moves when a human
 # re-runs the tables, and nothing prompts that when the fixture package ships.
-PINNED_SUITE_VERSION = "0.20.0"
+PINNED_SUITE_VERSION = "0.22.0"
 
 
 def test_the_pinned_fixture_version_is_the_one_on_disk() -> None:
