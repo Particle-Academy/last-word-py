@@ -1,0 +1,79 @@
+{
+    "blocks": [
+        { "type": "heading", "level": 1, "runs": [{ "text": "Quarterly Field Report" }] },
+        {
+            "type": "paragraph",
+            "runs": [
+                { "text": "Plain text, then " },
+                { "text": "bold", "bold": true },
+                { "text": ", " },
+                { "text": "italic", "italic": true },
+                { "text": ", " },
+                { "text": "underlined", "underline": true },
+                { "text": " and " },
+                { "text": "struck", "strike": true },
+                { "text": " words, with a " },
+                { "text": "link", "link": "https://particle.academy/reports" },
+                { "text": " in the middle." }
+            ]
+        },
+        { "type": "heading", "level": 2, "runs": [{ "text": "Beyond ASCII" }] },
+        { "type": "paragraph", "runs": [{ "text": "Café, naïve, jalapeño — 日本語のテキスト and an emoji 🎉 in one line." }] },
+        { "type": "heading", "level": 2, "runs": [{ "text": "Findings" }] },
+        {
+            "type": "list",
+            "items": [
+                { "runs": [{ "text": "Top-level finding" }] },
+                {
+                    "runs": [{ "text": "Finding with " }, { "text": "emphasis", "bold": true }],
+                    "children": [
+                        {
+                            "runs": [{ "text": "Second level" }],
+                            "children": [{ "runs": [{ "text": "Third level" }] }]
+                        },
+                        { "runs": [{ "text": "Second level again" }] }
+                    ]
+                },
+                { "runs": [{ "text": "Back at the top" }] }
+            ]
+        },
+        {
+            "type": "list",
+            "ordered": true,
+            "items": [
+                { "runs": [{ "text": "First step" }] },
+                { "runs": [{ "text": "Second step" }], "children": [{ "runs": [{ "text": "Nested step" }] }] },
+                { "runs": [{ "text": "Third step" }] }
+            ]
+        },
+        { "type": "heading", "level": 3, "runs": [{ "text": "Numbers" }] },
+        {
+            "type": "table",
+            "rows": [
+                {
+                    "header": true,
+                    "cells": [
+                        { "blocks": [{ "type": "paragraph", "runs": [{ "text": "Region" }] }] },
+                        { "blocks": [{ "type": "paragraph", "runs": [{ "text": "Revenue" }] }] },
+                        { "blocks": [{ "type": "paragraph", "runs": [{ "text": "Change" }] }] }
+                    ]
+                },
+                {
+                    "cells": [
+                        { "blocks": [{ "type": "paragraph", "runs": [{ "text": "North" }] }] },
+                        { "blocks": [{ "type": "paragraph", "runs": [{ "text": "1,250,000" }] }] },
+                        { "blocks": [{ "type": "paragraph", "runs": [{ "text": "+18.4%" }] }] }
+                    ]
+                },
+                {
+                    "cells": [
+                        { "blocks": [{ "type": "paragraph", "runs": [{ "text": "São Paulo" }] }] },
+                        { "blocks": [{ "type": "paragraph", "runs": [{ "text": "980,400" }] }] },
+                        { "blocks": [{ "type": "paragraph", "runs": [{ "text": "−4.2%" }] }] }
+                    ]
+                }
+            ]
+        },
+        { "type": "paragraph", "runs": [{ "text": "The last paragraph of the report." }] }
+    ]
+}

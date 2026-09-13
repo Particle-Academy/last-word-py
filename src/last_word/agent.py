@@ -22,11 +22,15 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .exceptions import SchemaException
+from .exceptions import SchemaException, UnsupportedFormatException
 from .helpers.php import PHP_TRIM_CHARS
 from .markdown.from_markdown import FromMarkdown
 from .markdown.to_markdown import ToMarkdown
+from .reader import format as _format
+from .reader.doc_reader import DocReader
 from .reader.docx_reader import DocxReader
+from .reader.odt_reader import OdtReader
+from .reader.rtf_reader import RtfReader
 from .schema.repairer import Repairer
 from .schema.schema import Schema
 from .schema.validator import Validator
@@ -59,7 +63,6 @@ def _installed_version() -> str:
 
 VERSION = _installed_version()
 
-_ZIP_SIGNATURE = b"PK\x03\x04"
 
 # PCRE's `\s` without the /u modifier is ASCII-only, and PHP's word count leans
 # on that. `re.ASCII` keeps the two counting the same things.
@@ -142,31 +145,55 @@ def write(doc: dict[str, Any], path: str | os.PathLike[str]) -> dict[str, Any]:
 
 
 def read(bytes_or_path: bytes | bytearray | str | os.PathLike[str]) -> dict[str, Any]:
-    """Parse a real .docx back into the Doc model.
+    """Parse a document back into the Doc model.
 
-    Takes the raw bytes (starting with the zip signature) or, as a convenience,
-    a filesystem path -- the same dual behaviour as the PHP mirror. Best-effort
-    on Word-authored files: headings, runs with formatting, hyperlinks, nested
-    lists, tables, images and page breaks come through; unknown constructs
-    degrade to plain paragraphs.
+    Takes the raw bytes or, as a convenience, a filesystem path -- the same dual
+    behaviour as the PHP mirror -- and decides the format from the CONTENT:
+    .docx, legacy .doc (Word 97-2003), .odt and .rtf all return the same shape.
+    Best-effort on Word-authored files: headings, runs with formatting,
+    hyperlinks, nested lists, tables, images and page breaks come through;
+    unknown constructs degrade to plain paragraphs.
+
+    Raises `UnsupportedFormatException` (a `ValueError`) for bytes that are none
+    of those formats, naming what they are when that is knowable (`xls`, `pptx`,
+    ...), and `RuntimeError` for a file in a supported format that is damaged.
     """
     if isinstance(bytes_or_path, (bytes, bytearray)):
         data = bytes(bytes_or_path)
-        if data.startswith(_ZIP_SIGNATURE):
-            return DocxReader().read(data)
-        raise ValueError("read() expects DOCX bytes or a path to a .docx file.")
-
-    if isinstance(bytes_or_path, (str, os.PathLike)):
+    elif isinstance(bytes_or_path, (str, os.PathLike)):
         candidate = Path(bytes_or_path)
         try:
             is_file = candidate.is_file()
         except (OSError, ValueError):
             is_file = False
-        if is_file:
-            return DocxReader().read(candidate.read_bytes())
-        raise ValueError("read() expects DOCX bytes or a path to a .docx file.")
+        if not is_file:
+            raise ValueError("read() expects document bytes or a path to a document file.")
+        data = candidate.read_bytes()
+    else:
+        raise ValueError("read() expects document bytes or a path to a document file.")
 
-    raise ValueError("read() expects DOCX bytes or a path to a .docx file.")
+    detected = _format.detect(data)
+    if detected == _format.DOCX:
+        return DocxReader().read(data)
+    if detected == _format.ODT:
+        return OdtReader().read(data)
+    if detected == _format.RTF:
+        return RtfReader().read(data)
+    if detected == _format.DOC:
+        # A compound file: DocReader reads a Word document and names anything
+        # else (.xls, .ppt, .msg) itself, because only the container knows.
+        return DocReader().read(data)
+    if detected == _format.UNKNOWN:
+        raise UnsupportedFormatException(
+            _format.UNKNOWN,
+            "read() could not recognise these bytes as a document. "
+            "It reads .docx, .doc (Word 97-2003), .odt and .rtf.",
+        )
+    raise UnsupportedFormatException(
+        detected,
+        f"This is a .{detected} file, not a word-processing document. "
+        "read() reads .docx, .doc (Word 97-2003), .odt and .rtf.",
+    )
 
 
 def from_bytes(data: bytes | bytearray) -> dict[str, Any]:

@@ -11,12 +11,44 @@ minor.
 
 ## [Unreleased]
 
-### Fixed
-
-- **`version()` returns the PACKAGE version, not the schema's.** It returned `Schema.VERSION` — the version of the document MODEL, which moves when the shape of a `Doc` changes rather than when the package ships — so the two could only agree by coincidence. The PHP twin had already drifted apart on exactly this (reporting 0.2.0 from a 0.4.x release). `Schema.VERSION` still exists and still means what it says. `__version__` now reads the installed distribution metadata.
-
+## [0.2.0]
 
 ### Added
+
+- **`read()` reads legacy Word `.doc` (Word 97-2003), `.odt` and `.rtf`, not
+  just `.docx`** (last-word#1), matching the PHP and Node engines. The format is
+  decided from the bytes, never a file name, and all four return the same
+  document shape. The compound-file (MS-CFB) and Word binary (MS-DOC) readers
+  are this package's own code; there is still no dependency.
+
+  - `.doc`: paragraph text from every piece (8-bit and UTF-16), headings by
+    built-in style id, direct bold / italic / underline / strike, `HYPERLINK`
+    fields (other fields keep their result), nested bulleted and numbered
+    lists, tables with header rows, page breaks. Not read: style-inherited
+    formatting, fonts / sizes / colours, images, text boxes, headers / footers
+    / footnotes / comments, merged cells, the title.
+  - `.odt`: headings, paragraphs, bold / italic / underline / strike from
+    automatic styles, links, nested lists, tables with header rows and merged
+    cells, `text:s` / `text:tab` / `text:line-break`, page breaks, the title.
+  - `.rtf`: a group-scoped tokenizer; headings by style name or outline level,
+    direct formatting with style formatting subtracted, links, lists from the
+    list table, tables (header rows where `\trhdr` marks them), `\uN` with
+    `\ucN` skipping and surrogate pairs, `\'hh` in the `\ansicpg` code page
+    (874 and 1250-1258 decoded; 932/936/949/950 double-byte characters become
+    one U+FFFD each, as in the other two engines, although Python's codecs
+    could decode them).
+
+  One document written by last-word and converted by LibreOffice reads back
+  from `.doc` and `.odt` IDENTICAL to the `.docx`, and from `.rtf` identical
+  except the header-row flag that file does not carry. `test_legacy_formats.py`
+  asserts it against `report.read.json`, the same committed answer the PHP and
+  Node suites assert, compared as JSON text.
+
+- **`UnsupportedFormatException`** (a `ValueError`), with a `format` naming what
+  the bytes are: `doc` (Word 6/95 or encrypted), `xls` / `ppt` / `msg` / `cfb`,
+  `xlsx` / `pptx` / `ods` / `odp`, or `unknown`. A damaged file in a supported
+  format raises `RuntimeError`. `DocReader`, `OdtReader` and `RtfReader` are
+  exported beside `DocxReader`.
 
 - **A rich-layout surface, so a business one-pager is expressible.** The model
   was far narrower than the XML this engine already emitted: font size, font
@@ -58,7 +90,33 @@ minor.
   assert the same file, so a mapping that drifts in one fails there rather than
   quietly becoming that engine's behaviour.
 
+### Changed
+
+- **Bytes that are not a document raise `UnsupportedFormatException`**, and a
+  zip with no document part in it is refused at the door with format `unknown`
+  rather than failing inside the docx reader as "not a DOCX" (`RuntimeError`).
+  Non-zip bytes raised a plain `ValueError` before and raise a `ValueError`
+  subclass now, so an `except ValueError` still catches them. Only code that
+  caught `RuntimeError` for a zip with no document in it needs to change.
+
+- **Table properties are now written inline, not taken from a named style.**
+  A named table style cannot vary per table instance, so per-table borders
+  forced this. Also reconciled with it: header cells are one grey in all three
+  engines, and header bold is one mechanism.
+
+- **Document defaults name an East Asian font.** Without it Word picks its own
+  face for CJK runs, which is exactly the text a mixed-script document
+  contains.
+
+  **What you must do: nothing.** No existing key changed meaning, nothing was
+  removed and nothing was renamed. A document written before this release
+  produces the same page. The visible differences are confined to tables, are
+  small, and are listed above so a pixel comparison against an old build is not
+  a surprise.
+
 ### Fixed
+
+- **`version()` returns the PACKAGE version, not the schema's.** It returned `Schema.VERSION` — the version of the document MODEL, which moves when the shape of a `Doc` changes rather than when the package ships — so the two could only agree by coincidence. The PHP twin had already drifted apart on exactly this (reporting 0.2.0 from a 0.4.x release). `Schema.VERSION` still exists and still means what it says. `__version__` now reads the installed distribution metadata.
 
 - **Adjacent tables no longer merge into one in Word.** OOXML merges two
   `<w:tbl>` elements that touch, imposing the first table's column grid on the
@@ -77,22 +135,19 @@ minor.
   dependency, resolved from the sibling checkout in the envelope; it is not on
   PyPI.
 
-### Changed
+### Security
 
-- **Table properties are now written inline, not taken from a named style.**
-  A named table style cannot vary per table instance, so per-table borders
-  forced this. Also reconciled with it: header cells are one grey in all three
-  engines, and header bold is one mechanism.
-
-- **Document defaults name an East Asian font.** Without it Word picks its own
-  face for CJK runs, which is exactly the text a mixed-script document
-  contains.
-
-  **What you must do: nothing.** No existing key changed meaning, nothing was
-  removed and nothing was renamed. A document written before this release
-  produces the same page. The visible differences are confined to tables, are
-  small, and are listed above so a pixel comparison against an old build is not
-  a surprise.
+- **Legacy readers treat an upload as hostile.** Compound-file offsets are
+  bounds-checked; sector chains, the DIFAT chain and the directory tree are
+  followed at most once per node; a stream over 256 MB, or an allocation table
+  naming more sectors than the file holds, is refused; the Word piece table
+  must run forwards; an ODT part carrying a DOCTYPE is refused; only the three
+  ODT parts read are decompressed, each refused past 64 MB and read as a
+  bounded stream; element nesting past 257 is refused, as libxml refuses it;
+  repeated rows and columns are capped at 1,000 per repeat and 100,000 cells
+  in total; RTF nesting is capped at 10,000 on an explicit stack and `\bin`
+  data is skipped by its length. Each guard has a test on a hand-built file
+  (`tests/legacy_files.py`).
 
 ### Notes
 

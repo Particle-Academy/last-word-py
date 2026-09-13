@@ -13,13 +13,22 @@ and must not be copied here.
 ```
 src/last_word/__init__.py        public façade re-exports
 src/last_word/agent.py           the Agent surface, as module-level functions
-src/last_word/exceptions.py      SchemaException
+src/last_word/exceptions.py      SchemaException, UnsupportedFormatException
 src/last_word/schema/schema.py   Schema (VERSION, json_schema())
 src/last_word/schema/validator.py
 src/last_word/schema/repairer.py
 src/last_word/schema/types.py    TypedDicts — editor hints only
 src/last_word/writer/docx_writer.py
 src/last_word/reader/docx_reader.py
+src/last_word/reader/format.py       content sniffing: docx / doc / odt / rtf / named refusals
+src/last_word/reader/doc_reader.py   Word 97-2003 .doc
+src/last_word/reader/doc/compound_file.py   MS-CFB container
+src/last_word/reader/doc/word_binary.py     MS-DOC FIB, piece table, FKPs, styles, lists
+src/last_word/reader/odt_reader.py
+src/last_word/reader/odt/xml_dom.py  ordered, qualified-name XML parser (Node has one; PHP has DOM)
+src/last_word/reader/rtf_reader.py
+src/last_word/reader/code_page.py    Windows code pages, one table for all three engines
+src/last_word/reader/structure.py    run merging + list nesting shared by the legacy readers
 src/last_word/markdown/to_markdown.py
 src/last_word/markdown/from_markdown.py
 src/last_word/helpers/xml.py     escaping + the XML declaration
@@ -139,6 +148,8 @@ peers' (`.ai/knowledge/last-word-spec.md`, and `documents.md` §5.4 for 9–11):
 | `test_describe.py` | vector 6 |
 | `test_images.py` | vector 7 — sniffing and the 6.5in cap, asserted on the MODEL |
 | `test_cross_read.py` | a frozen Node-written `.docx` read back |
+| `test_legacy_formats.py` | `.doc` / `.odt` / `.rtf` read as the `.docx` does, held to the PHP read (`tests/data/formats/report.read.json`) as JSON text; refusals by name; the hostile-input guards on files `tests/legacy_files.py` builds |
+| `test_rtf_reader.py` | the RTF tokenizer's rules one at a time, case for case with PHP and Node |
 | `test_php_helpers.py` | the shims, `php_round` above all |
 | `tests/conformance/` | the shared `fancy-conformance` fixture tables |
 

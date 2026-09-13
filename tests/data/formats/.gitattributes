@@ -1,0 +1,3 @@
+# Fixtures are compared by content and copied byte-for-byte into the Node and
+# Python ports, so no checkout may rewrite their line endings.
+* -text

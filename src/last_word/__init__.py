@@ -38,10 +38,13 @@ from .agent import (
     version,
     write,
 )
-from .exceptions import SchemaException
+from .exceptions import SchemaException, UnsupportedFormatException
 from .markdown.from_markdown import FromMarkdown
 from .markdown.to_markdown import ToMarkdown
+from .reader.doc_reader import DocReader
 from .reader.docx_reader import DocxReader
+from .reader.odt_reader import OdtReader
+from .reader.rtf_reader import RtfReader
 from .schema.repairer import Repairer
 from .schema.schema import Schema
 from .schema.validator import Validator
@@ -64,13 +67,17 @@ __all__ = [
     "version",
     "write",
     # Low-level peers, named as in PHP and TypeScript
+    "DocReader",
     "DocxReader",
     "DocxWriter",
     "FromMarkdown",
+    "OdtReader",
     "Repairer",
+    "RtfReader",
     "Schema",
     "SchemaException",
     "ToMarkdown",
+    "UnsupportedFormatException",
     "Validator",
     "__version__",
 ]

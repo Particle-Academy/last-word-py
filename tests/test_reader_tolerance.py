@@ -114,13 +114,20 @@ def test_rejects_non_docx_input_with_a_clear_error() -> None:
         last_word.read(b"this is not a docx")
 
 
-def test_a_zip_without_a_document_part_is_not_a_docx() -> None:
+def test_a_zip_without_a_document_part_is_not_a_document() -> None:
+    """Refused at the door by `read()`'s format sniffing, as the PHP engine does.
+
+    Before 0.2 this reached the docx reader and failed there as "not a DOCX". It
+    is now an `UnsupportedFormatException` naming the format `unknown`: the bytes
+    are a zip, and nothing in them says which document they are.
+    """
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
         archive.writestr("hello.txt", "not a document")
 
-    with pytest.raises(RuntimeError, match="not a DOCX"):
+    with pytest.raises(last_word.UnsupportedFormatException) as caught:
         last_word.read(buffer.getvalue())
+    assert caught.value.format == "unknown"
 
 
 def test_a_doctype_in_document_xml_is_refused_rather_than_expanded() -> None:
