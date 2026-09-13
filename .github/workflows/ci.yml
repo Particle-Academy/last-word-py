@@ -72,8 +72,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
+      # pyproject's pytest `pythonpath` finds the shared loader at
+      # ../fancy-conformance/python/src, which is where it sits in the .agi
+      # envelope. Here the checkout is INSIDE the workspace, so that path does not
+      # exist and every conformance module failed to import: red on every push
+      # from 2026-08-24 to 2026-09-13 without anyone looking. PYTHONPATH points
+      # at the checkout this job actually made.
       - name: Test
         run: python -m pytest
         env:
           LAST_WORD_PHP_SRC: ${{ github.workspace }}/.php-last-word/src
           FANCY_CONFORMANCE_ROOT: ${{ github.workspace }}/.fancy-conformance
+          PYTHONPATH: ${{ github.workspace }}/.fancy-conformance/python/src
