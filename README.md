@@ -1,5 +1,7 @@
 # last-word
 
+[![Fancified](art/fancified.svg)](https://particle.academy)
+
 Zero-dependency `.docx` writer + reader for agentic word-processing documents —
 a JSON document model with **markdown bridges**. The Python mirror of PHP
 [`particle-academy/last-word`](https://github.com/Particle-Academy/last-word) and
