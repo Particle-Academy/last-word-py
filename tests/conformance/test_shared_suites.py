@@ -46,9 +46,15 @@ import fancy_conformance as loader
 # structural rather than anyone forgetting: the pin only moves when a human
 # re-runs the tables, and nothing prompts that when the fixture package ships.
 #
+# Moved 0.22.0 -> 0.22.1 on 2026-09-13. That release changed no case and no
+# golden (the Rust loader pins fancy-json by tag, plus docs); re-run first against
+# a v0.22.1 checkout all the same: last-word/docx-constructs 44, shared/decimal
+# 18, shared/image-header 15 (+1 documented skip, 0012), nothing failed, the same
+# counts CI printed at 0.22.0.
+#
 # CI checks out `ref: v<this>` from .github/workflows/ci.yml. Move the two
 # together; test_ci_checks_out_the_fixture_tag_this_suite_pins fails otherwise.
-PINNED_SUITE_VERSION = "0.22.0"
+PINNED_SUITE_VERSION = "0.22.1"
 
 
 def test_the_pinned_fixture_version_is_the_one_on_disk(capsys: pytest.CaptureFixture[str]) -> None:
