@@ -36,14 +36,13 @@ dependencies = []
 dev = ["pytest>=8.0"]
 
 [dependency-groups]
-# `fancy-conformance` is the shared FIXTURE package -- first-party, zero runtime
-# dependencies of its own, and TEST-ONLY, so it never reaches published
-# metadata. It is not on PyPI; it is checked out beside this repository in the
-# .agi envelope, and CI checks it out explicitly.
-test = ["pytest>=8.0", "fancy-conformance"]
-
-[tool.uv.sources]
-fancy-conformance = { path = "../fancy-conformance/python", editable = true }
+# `fancy-conformance` is deliberately NOT a requirement here. It is the suite's
+# internal alignment tool, not a product, and is never published to PyPI, so
+# listing it sent `pip install -e . --group test` to PyPI for a name that does
+# not exist and failed the whole install. The loader reaches the suite through
+# pytest's `pythonpath` below instead -- the checkout beside this repository in
+# the .agi envelope -- and CI puts its checkout of the pinned tag on PYTHONPATH.
+test = ["pytest>=8.0"]
 
 [project.urls]
 Homepage = "https://github.com/Particle-Academy/last-word-py"
