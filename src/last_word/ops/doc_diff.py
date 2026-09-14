@@ -102,6 +102,11 @@ class DocDiff:
         port's `to_bytes` and read back with `read`."""
         from ..agent import read, to_bytes  # the agent imports this module
 
+        # PHP's `equivalent(array $a, array $b)`: a TypeError before anything is
+        # written, not the SchemaException `to_bytes` would raise for a non-dict.
+        _require_array(a, "a")
+        _require_array(b, "b")
+
         return DocDiff.same(read(to_bytes(a)), read(to_bytes(b)))
 
     @staticmethod

@@ -332,6 +332,7 @@ def _special_diffs() -> dict[str, tuple[Any, Any]]:
         "a long list with three changes, past the limit": (_many("same", 501), _three_changed(501)),
         "a long list with three changes, within the limit": (_many("same", 500), _three_changed(500)),
         "an invalid document raises": ({"blocks": [p("a")]}, {"blocks": [{"type": "nope"}]}),
+        "a document that is not an array raises": ("not a document", {"blocks": [p("a")]}),
     }
 
 
@@ -483,6 +484,7 @@ def _equivalent_pairs() -> dict[str, tuple[Any, Any]]:
         "a different title": ({"title": "A", "blocks": [p("a")]}, {"title": "B", "blocks": [p("a")]}),
         "an int and a float size": ({"defaultSize": 12, "blocks": [p("a")]}, {"defaultSize": 12.0, "blocks": [p("a")]}),
         "an invalid document raises": ({"blocks": [p("a")]}, {"blocks": "nope"}),
+        "a document that is not an array raises": ("not a document", {"blocks": [p("a")]}),
     }
 
 

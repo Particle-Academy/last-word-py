@@ -518,6 +518,8 @@ def test_reduce_takes_one_op_or_a_list_the_way_php_reads_an_array() -> None:
         last_word.reduce("not a document", remove)
     with pytest.raises(TypeError):
         last_word.diff(d, None)
+    with pytest.raises(TypeError):
+        last_word.equivalent("not a document", d)
 
 
 def test_the_reducer_follows_rfc_6901() -> None:
