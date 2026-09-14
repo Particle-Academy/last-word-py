@@ -26,6 +26,8 @@ from .exceptions import SchemaException, UnsupportedFormatException
 from .helpers.php import PHP_TRIM_CHARS
 from .markdown.from_markdown import FromMarkdown
 from .markdown.to_markdown import ToMarkdown
+from .ops import DocDiff, DocOpSchema, DocReducer
+from .ops._php_array import is_array, is_list_pairs, pairs
 from .reader import format as _format
 from .reader.doc_reader import DocReader
 from .reader.docx_reader import DocxReader
@@ -266,6 +268,60 @@ def version() -> str:
     name when you want the model version.
     """
     return VERSION
+
+
+# ─── Document versions as ops ────────────────────────────────────────────
+
+
+def diff(a: dict[str, Any], b: dict[str, Any]) -> list[dict[str, Any]]:
+    """The ops that turn document `a` into document `b`.
+
+    - `reduce(a, diff(a, b))` equals `b` (key order aside). The ops are verified
+      by replaying them; if they do not reproduce `b`, the diff is one
+      `doc.replace`.
+    - Documents that write the same file diff to `[]`, so
+      `diff(d, read(to_bytes(d))) == []`: a save without a change records
+      nothing.
+    - Rewording one paragraph is one `blocks.replace` at its own path, even
+      inside a table cell, a quote or a list; moving one is one `blocks.move`.
+
+    Store `diff(new, old)` to keep a version as the ops that restore it. Both
+    documents must be valid: the "same file" check writes them, and raises
+    `SchemaException` otherwise. A value JSON cannot hold (NaN, a lone
+    surrogate) raises `ValueError`.
+
+    The PHP reference (`Agent::diff`, last-word 0.6.3) and the Node port return
+    the same ops in the same order for the same input.
+    """
+    return DocDiff.diff(a, b)
+
+
+def reduce(doc: dict[str, Any], op_or_ops: dict[str, Any] | list[dict[str, Any]]) -> dict[str, Any]:
+    """Apply one op, or a list of them, to a document; returns a new document.
+
+    An op whose path, position or key does not resolve is skipped. Nothing
+    passed in is modified, and the result shares no mutable structure with the
+    inputs.
+    """
+    if not is_array(op_or_ops):
+        raise TypeError(f"[last-word] reduce() takes an op or a list of ops, got {type(op_or_ops).__name__}")
+    items = pairs(op_or_ops)
+    # PHP: `$opOrOps === [] || array_is_list($opOrOps) ? $opOrOps : [$opOrOps]`.
+    ops = [op for _, op in items] if is_list_pairs(items) else [op_or_ops]
+    return DocReducer.apply_all(doc, ops)
+
+
+def op_schema() -> dict[str, Any]:
+    """JSON Schema for one document op, for validating ops on the wire or
+    registering the op vocabulary as an LLM tool."""
+    return DocOpSchema.json_schema()
+
+
+def equivalent(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    """Whether two documents write the same file: runs the reader merges, a
+    header row's bold and an empty paragraph the writer drops do not make them
+    different."""
+    return DocDiff.equivalent(a, b)
 
 
 # ─── Word counting ───────────────────────────────────────────────────────

@@ -120,6 +120,55 @@ encrypted file, `xls`, `ppt`, `msg` or `cfb` for another compound file, `xlsx`,
 `pptx`, `ods`, `odp`, or `unknown`. A damaged file in a supported format raises
 `RuntimeError` instead.
 
+## Document versions as ops
+
+A version history cannot keep a .docx per edit, and hashing the bytes cannot
+keep a one-word edit small. `last_word.diff(a, b)` is the op list that turns
+document `a` into document `b`; store `diff(newer, older)` and a version is the
+ops that restore it.
+
+```python
+import last_word
+
+ops = last_word.diff(before, after)
+# [{"op": "blocks.replace", "path": "/blocks/4/rows/1/cells/1/blocks", "index": 0, "block": {...}}]
+
+last_word.reduce(before, ops)                                 # equals `after`, key order aside
+last_word.diff(doc, last_word.read(last_word.to_bytes(doc)))  # [] -- a save without a change records nothing
+```
+
+- **Exact.** `reduce(a, diff(a, b))` equals `b`. The ops are verified by
+  replaying them; if they do not reproduce `b`, the diff is one `doc.replace`.
+- **Small.** Every list is aligned by content -- the blocks, a quote's blocks, a
+  list's items and children, a table's rows, a row's cells, a cell's blocks -- so
+  rewording a paragraph inside a table cell is one `blocks.replace` at that
+  cell's path, and moving a block is one `blocks.move`.
+- **Same file, no ops.** Documents that write the same file (`equivalent(a, b)`:
+  merged runs, a header row's bold, a dropped empty paragraph) diff to `[]`.
+  Both documents must be valid, because that check writes them.
+- **Interchangeable with PHP and Node.** The same two documents give the same
+  ops, in the same order, as `Agent::diff` and `Agent.diff`, so a history
+  written by any engine replays in the others. Equality is therefore PHP's:
+  `1` and `1.0` differ, and so do `True` and `1`.
+
+Blocks have no ids, so a list op names the list by JSON Pointer and the item by
+index:
+
+| op | `path` ends in | value key |
+|---|---|---|
+| `blocks.insert` / `remove` / `move` / `replace` | `blocks` | `block` |
+| `items.*` | `items` or `children` | `item` |
+| `rows.*` | `rows` | `row` |
+| `cells.*` | `cells` | `cell` |
+| `doc.set` `{key, value}` | -- (null removes; `blocks` refused) | `value` |
+| `doc.replace` `{doc}` | -- | `doc` |
+
+`insert` clamps its index and creates a missing list; `remove`, `replace` and
+`move` skip an index out of range; `move` removes at `from`, then inserts at
+`to`. `reduce` never modifies its input and skips any op whose path, position
+or key does not resolve. `op_schema()` is the JSON Schema for one op, for
+validating ops on the wire or registering the vocabulary as an LLM tool.
+
 ## Moving between runtimes
 
 The three engines are the same library. Only the call shape changes:
@@ -133,6 +182,7 @@ The three engines are the same library. Only the call shape changes:
 | markdown | `Agent::fromMarkdown($md)` | `Agent.fromMarkdown(md)` | `last_word.from_markdown(md)` |
 | repair | `Agent::validateAndRepair($doc)` | `Agent.validateAndRepair(doc)` | `last_word.validate_and_repair(doc)` |
 | errors | `SchemaException->errors` | `SchemaException.errors` | `SchemaException.errors` |
+| versions | `Agent::diff($a, $b)`, `Agent::reduce($doc, $ops)` | `Agent.diff(a, b)`, `Agent.reduce(doc, ops)` | `last_word.diff(a, b)`, `last_word.reduce(doc, ops)` |
 
 `write` is async in Node **only** because browsers have no synchronous
 filesystem. PHP and Python are both synchronous, and that is the whole

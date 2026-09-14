@@ -17,6 +17,10 @@ converter sandwich in between.
     imported = last_word.read(data)
     markdown = last_word.to_markdown(imported)
 
+    last_word.diff(doc, imported)            # [] -- a save without a change records nothing
+    ops = last_word.diff(doc, edited)        # the ops that turn `doc` into `edited`
+    last_word.reduce(doc, ops)               # equals `edited`, key order aside
+
 The document model is plain `dict`s -- see `last_word.schema.types` for
 TypedDicts that describe the shape to your editor and type checker without
 standing between an agent's JSON and the Validator.
@@ -27,10 +31,14 @@ from __future__ import annotations
 from . import agent
 from .agent import (
     describe,
+    diff,
+    equivalent,
     from_bytes,
     from_markdown,
     json_schema,
+    op_schema,
     read,
+    reduce,
     to_bytes,
     to_markdown,
     validate,
@@ -41,6 +49,7 @@ from .agent import (
 from .exceptions import SchemaException, UnsupportedFormatException
 from .markdown.from_markdown import FromMarkdown
 from .markdown.to_markdown import ToMarkdown
+from .ops import DocDiff, DocOpSchema, DocReducer
 from .reader.doc_reader import DocReader
 from .reader.docx_reader import DocxReader
 from .reader.odt_reader import OdtReader
@@ -56,10 +65,14 @@ __all__ = [
     # The Agent surface
     "agent",
     "describe",
+    "diff",
+    "equivalent",
     "from_bytes",
     "from_markdown",
     "json_schema",
+    "op_schema",
     "read",
+    "reduce",
     "to_bytes",
     "to_markdown",
     "validate",
@@ -67,7 +80,10 @@ __all__ = [
     "version",
     "write",
     # Low-level peers, named as in PHP and TypeScript
+    "DocDiff",
+    "DocOpSchema",
     "DocReader",
+    "DocReducer",
     "DocxReader",
     "DocxWriter",
     "FromMarkdown",

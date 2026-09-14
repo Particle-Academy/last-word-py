@@ -75,6 +75,10 @@ def test_the_agent_surface_is_reachable_both_ways() -> None:
         "describe",
         "json_schema",
         "version",
+        "diff",
+        "reduce",
+        "op_schema",
+        "equivalent",
     ):
         assert getattr(last_word, name) is getattr(last_word.agent, name)
 
@@ -89,5 +93,8 @@ def test_the_low_level_peers_keep_their_sibling_names() -> None:
         "ToMarkdown",
         "FromMarkdown",
         "SchemaException",
+        "DocDiff",
+        "DocReducer",
+        "DocOpSchema",
     ):
         assert hasattr(last_word, name), name

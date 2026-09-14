@@ -11,6 +11,65 @@ minor.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-15
+
+### Added
+
+- **`diff()`, `reduce()`, `op_schema()` and `equivalent()`: a document's
+  versions stored as ops** (last-word#2), ported from PHP
+  `particle-academy/last-word` 0.6.3, which is the reference (its 0.6.0 design
+  with the 0.6.1, 0.6.2 and 0.6.3 fixes). The same algorithm, so the same two
+  documents give the same ops in the same order in the PHP, Node and Python
+  engines, and an op history written by one replays in the others. A version
+  history cannot keep a .docx per edit, hashing the bytes cannot keep a one-word
+  edit small (it is a zip), and diffing `to_markdown()` output would lose run
+  formatting, tables and page breaks on restore. The diff is over Last Word's
+  own model.
+  - `reduce(a, diff(a, b))` equals `b`, key order aside. The ops are verified by
+    replaying them; ops that do not reproduce `b` become one `doc.replace`.
+  - Every list is aligned by content: the top-level blocks, a quote's blocks, a
+    list's items and their children, a table's rows, a row's cells and a cell's
+    blocks. Rewording one paragraph is one `blocks.replace` at its own path, even
+    inside a table cell; moving one is one `blocks.move`. A container whose own
+    properties changed is replaced whole.
+  - Documents that write the same file diff to `[]`, so a save without a change
+    records nothing, even where the reader normalises (merged runs, a header
+    row's bold, a dropped empty paragraph).
+  - Blocks have no ids, so ops address a list by JSON Pointer and an item by
+    index: `blocks.*`, `items.*`, `rows.*` and `cells.*`, each with
+    `insert`/`remove`/`move`/`replace`, plus `doc.set` and `doc.replace`.
+  - `reduce()` skips an op whose position is not an int or a digit string
+    (`True` and `2.0` included), whose `op` or `path` is not a string, whose
+    `doc.set` `key` is not a non-empty string, or whose path names a non-empty
+    list by a key (`/blocks/blocks`). It never modifies its input, and the
+    result shares nothing with it.
+  - Equality is PHP's, not Python's: `1` and `1.0` differ, `True` and `1` differ,
+    `[]` and `{}` are the same, key order is ignored and list order is not. A
+    value JSON cannot hold (NaN, an infinity, a lone surrogate, more than 4096
+    nested arrays) raises `ValueError`, as PHP throws `JsonException`.
+  - `doc.set` keys are always strings, a numeric key such as `"5"` included
+    (PHP 0.6.3), and `op_schema()`'s `doc.set` `key` has `minLength: 1`.
+
+  **What you must do:** nothing. This only adds functions.
+
+- **`DocDiff`, `DocReducer` and `DocOpSchema`**, exported beside the other
+  building blocks, named as in PHP and Node.
+
+`tests/test_doc_ops_parity_php.py` runs the PHP package's `Agent::diff`,
+`Agent::reduce`, `Agent::equivalent`, `DocDiff::same` and `DocDiff::hunks` on
+every case in one batch and requires the same answer, op for op, key for key and
+int for float, and the same replayed document: each edit PHP's own suite pins,
+both ways; seeded random edits at every depth; one entry moved in each kind of
+list; raw alignments, where ties decide the hunks; the alignment limit; reducer
+edge cases no diff emits; and PHP's JSON depth limit. The op schema is compared
+byte for byte. Unlike the Node port, there is no divergence to list: Python
+values carry the int/float distinction and the key order that PHP's do.
+
+One PHP behaviour is matched and reported rather than fixed here: a valid
+document with an explicit `null` top-level property (`"page": null`) diffs to
+one `doc.replace` whenever anything else changed, because `diff()` treats the
+null as absent and the replay check does not.
+
 ## [0.2.0]
 
 ### Added
@@ -228,5 +287,7 @@ minor.
   `RecursionError`. Python's frame limit is reached long before either peer's
   stack would be, so this is a Python-specific guard with no counterpart there.
 
-[Unreleased]: https://github.com/Particle-Academy/last-word-py/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Particle-Academy/last-word-py/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Particle-Academy/last-word-py/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/Particle-Academy/last-word-py/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Particle-Academy/last-word-py/releases/tag/v0.1.0

@@ -34,6 +34,10 @@ src/last_word/markdown/from_markdown.py
 src/last_word/helpers/xml.py     escaping + the XML declaration
 src/last_word/helpers/image_size.py
 src/last_word/helpers/php.py     PHP semantics Python does not share
+src/last_word/ops/doc_diff.py        DocDiff: diff, equivalent, same, hunks
+src/last_word/ops/doc_reducer.py     DocReducer: applies ops (JSON Pointer paths)
+src/last_word/ops/doc_op_schema.py   DocOpSchema: the op JSON Schema
+src/last_word/ops/_php_array.py      PHP array semantics for the ops (Node: src/ops/php.ts)
 ```
 
 The layout mirrors the two peers file-for-file on purpose: a reviewer moving
@@ -130,6 +134,24 @@ separator here and nowhere else. The table-cell split is a hand-written scanner
 even though `re` has lookbehind, because that is the algorithm the Rust and Go
 ports must implement without lookaround.
 
+## The ops run on PHP arrays
+
+`ops/` (diff, reduce, the op schema) is held to PHP's ANSWERS, not just to
+round-tripping: a version history written by one engine is replayed by another,
+so the op list itself is the contract. Everything there goes through
+`ops/_php_array.py`:
+
+- **Equality is PHP's canonical JSON** (`canon`): `True` is not `1`, `1` is not
+  `1.0`, `[]` is `{}`, `{"0": x}` is `[x]`. Python's `==` gets the first two
+  wrong. Never compare documents with `==` inside `ops/`.
+- **`bool` before `int`, every time** (`position`, `identical`, `php_key`).
+- **`canon` raises `ValueError`** where PHP's `json_encode` fails -- NaN, INF, a
+  lone surrogate, more than 4096 nested arrays -- and walks an explicit stack, so
+  that limit is PHP's and not Python's recursion limit.
+- **The reducer is pure.** It copies each level it changes and the public entry
+  points deep-copy once; `diff` deep-copies the ops it returns, because they
+  hold values taken from `b`.
+
 ## Testing
 
 TDD, vectors first. The suite is pytest, and the vector numbering matches the
@@ -151,6 +173,8 @@ peers' (`.ai/knowledge/last-word-spec.md`, and `documents.md` §5.4 for 9–11):
 | `test_legacy_formats.py` | `.doc` / `.odt` / `.rtf` read as the `.docx` does, held to the PHP read (`tests/data/formats/report.read.json`) as JSON text; refusals by name; the hostile-input guards on files `tests/legacy_files.py` builds |
 | `test_rtf_reader.py` | the RTF tokenizer's rules one at a time, case for case with PHP and Node |
 | `test_php_helpers.py` | the shims, `php_round` above all |
+| `test_doc_ops.py` | `diff` / `reduce` / `op_schema` / `equivalent`, case for case with PHP's `DocOpsTest` |
+| `test_doc_ops_parity_php.py` | the same ops, key order and int/float included, as PHP's `Agent::diff` / `reduce` over one batched `scripts/php_ops.php` run |
 | `tests/conformance/` | the shared `fancy-conformance` fixture tables |
 
 `tests/fixtures.py` owns `DOCS` (ported verbatim from the Node suite — do not

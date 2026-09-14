@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "fancy-last-word"
-version = "0.2.0"
+version = "0.3.0"
 description = "Zero-dependency docx writer/reader for agentic word-processing documents - JSON model + markdown bridges. The Python mirror of PHP particle-academy/last-word and Node @particle-academy/last-word."
 readme = "README.md"
 license = { file = "LICENSE" }
