@@ -52,9 +52,14 @@ import fancy_conformance as loader
 # 18, shared/image-header 15 (+1 documented skip, 0012), nothing failed, the same
 # counts CI printed at 0.22.0.
 #
+# Moved 0.22.1 -> 0.34.0 on 2026-10-19, re-run first against a checkout at the
+# v0.34.0 tag: last-word/docx-constructs 44, shared/decimal 18, shared/image-header
+# 15 (+1 documented skip, 0012), nothing failed -- the same counts as at 0.22.1.
+# It had blocked every local release preflight since the sibling checkout moved.
+#
 # CI checks out `ref: v<this>` from .github/workflows/ci.yml. Move the two
 # together; test_ci_checks_out_the_fixture_tag_this_suite_pins fails otherwise.
-PINNED_SUITE_VERSION = "0.22.1"
+PINNED_SUITE_VERSION = "0.34.0"
 
 
 def test_the_pinned_fixture_version_is_the_one_on_disk(capsys: pytest.CaptureFixture[str]) -> None:

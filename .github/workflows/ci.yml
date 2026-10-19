@@ -71,7 +71,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: Particle-Academy/fancy-conformance
-          ref: v0.22.1
+          ref: v0.34.0
           path: .fancy-conformance
 
       - name: Install
