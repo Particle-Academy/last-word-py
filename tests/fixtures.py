@@ -178,6 +178,18 @@ DOCS["canonical"] = canonical()
 # the engines could plausibly disagree and nothing would say so. Kept SEPARATE
 # from `DOCS` so the shared five stay recognisably the shared five.
 EXTRA_DOCS: dict[str, Any] = {
+    # Running header + footer with live page fields, on narrowed margins (the
+    # tab stops follow them), plus a hyperlink so a band rel shifting the
+    # numbered rel ids would show.
+    "bands": {
+        "title": "Bands",
+        "page": {
+            "margins": {"left": 54, "right": 54},
+            "header": {"right": "Board of Directors", "color": "#1F3A5F"},
+            "footer": {"left": "Q3 Board Memo | Confidential", "center": "Draft", "right": "Page {page} of {pages}", "size": 8},
+        },
+        "blocks": [{"type": "paragraph", "runs": [{"text": "Body"}, {"text": "link", "link": "https://example.com"}]}],
+    },
     # The `<w:p/>` pad. Without it Word MERGES the two tables into one.
     "adjacentTables": {
         "blocks": [

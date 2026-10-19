@@ -11,6 +11,18 @@ minor.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-19
+
+### Added
+
+- **Running headers and footers with live page numbers**: `page.header` and
+  `page.footer`, each one line with `left`, `center` and `right` slots (plus
+  optional `size` and `color`); `{page}` and `{pages}` become live PAGE and
+  NUMPAGES fields. The reader reads them back. **Nothing to do**: a document
+  without them is byte-identical. Same as `particle-academy/last-word` 0.8.0 and
+  `@particle-academy/last-word` 0.8.0; byte parity with PHP is the new `bands`
+  entry in `EXTRA_DOCS`.
+
 ## [0.3.0] - 2026-09-14
 
 ### Added

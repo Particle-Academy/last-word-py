@@ -146,6 +146,40 @@ def _hex(value: Any) -> str | None:
     return match.group(1).upper() if match is not None else None
 
 
+_BAND_TOKEN_RE = re.compile(r"(\{page\}|\{pages\})")
+
+
+def _band(spec: Any) -> dict[str, Any] | None:
+    """A band spec, normalised; None when it asks for nothing. Mirrors PHP DocxWriter::band()."""
+    if not isinstance(spec, dict):
+        return None
+    slots = {k: spec[k] if isinstance(spec.get(k), str) else "" for k in ("left", "center", "right")}
+    if slots["left"] == "" and slots["center"] == "" and slots["right"] == "":
+        return None
+    size = spec.get("size")
+    slots["size"] = php_float(size) if is_numeric(size) and php_float(size) > 0 else 9.0
+    slots["color"] = _hex(spec.get("color")) or "6B7280"
+    return slots
+
+
+def _band_runs(text: str, r_pr: str) -> str:
+    """Text with ``{page}`` / ``{pages}`` as live PAGE / NUMPAGES complex fields (see PHP)."""
+    out = ""
+    for piece in (p for p in _BAND_TOKEN_RE.split(text) if p != ""):
+        instr = {"{page}": "PAGE", "{pages}": "NUMPAGES"}.get(piece)
+        if instr is None:
+            out += f'<w:r>{r_pr}<w:t xml:space="preserve">{xml_text(piece)}</w:t></w:r>'
+        else:
+            out += (
+                f'<w:r>{r_pr}<w:fldChar w:fldCharType="begin"/></w:r>'
+                f'<w:r>{r_pr}<w:instrText xml:space="preserve"> {instr} </w:instrText></w:r>'
+                f'<w:r>{r_pr}<w:fldChar w:fldCharType="separate"/></w:r>'
+                f"<w:r>{r_pr}<w:t>1</w:t></w:r>"
+                f'<w:r>{r_pr}<w:fldChar w:fldCharType="end"/></w:r>'
+            )
+    return out
+
+
 def _shading_xml(value: Any) -> str:
     """`<w:shd>` -- the one spelling used for runs, paragraphs and cells alike."""
     fill = _hex(value)
@@ -385,6 +419,8 @@ class DocxWriter:
         # Twips between the page margins; set from `page` before any block
         # renders. Table grids are laid out against it.
         self._content_width = 9360
+        # The running header / footer parts asked for: kind -> part XML.
+        self._bands: dict[str, str] = {}
 
     # ─── Public ──────────────────────────────────────────────────────────
 
@@ -432,6 +468,8 @@ class DocxWriter:
         parts.append(("word/document.xml", document_xml.encode("utf-8")))
         parts.append(("word/styles.xml", self._build_styles(doc).encode("utf-8")))
         parts.append(("word/numbering.xml", self._build_numbering().encode("utf-8")))
+        for kind, band_xml in self._bands.items():
+            parts.append((f"word/{kind}1.xml", band_xml.encode("utf-8")))
         parts.append(
             ("word/_rels/document.xml.rels", self._build_document_rels().encode("utf-8"))
         )
@@ -480,6 +518,11 @@ class DocxWriter:
             '<Override PartName="/word/numbering.xml" ContentType="application/vnd.'
             'openxmlformats-officedocument.wordprocessingml.numbering+xml"/>'
         )
+        for kind in self._bands:
+            xml += (
+                f'<Override PartName="/word/{kind}1.xml" ContentType="application/vnd.'
+                f'openxmlformats-officedocument.wordprocessingml.{kind}+xml"/>'
+            )
         if has_title:
             xml += (
                 '<Override PartName="/docProps/core.xml" ContentType="application/vnd.'
@@ -540,6 +583,11 @@ class DocxWriter:
             '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/'
             'officeDocument/2006/relationships/numbering" Target="numbering.xml"/>'
         )
+        for kind in self._bands:
+            xml += (
+                f'<Relationship Id="rId{kind.capitalize()}1" Type="http://schemas.openxmlformats.org/'
+                f'officeDocument/2006/relationships/{kind}" Target="{kind}1.xml"/>'
+            )
         for rid, rel in self._rels.items():
             if rel["type"] == "hyperlink":
                 xml += (
@@ -570,10 +618,21 @@ class DocxWriter:
         # slot -- not in a body paragraph.
         body = self._render_blocks(doc.get("blocks") or [])
 
+        # Header/footer references come FIRST in w:sectPr (before w:pgSz).
+        self._bands = {}
+        references = ""
+        page_spec = doc.get("page") if isinstance(doc.get("page"), (dict, list)) else {}
+        for kind in ("header", "footer"):
+            spec = _band(page_spec.get(kind) if isinstance(page_spec, dict) else None)
+            if spec is not None:
+                self._bands[kind] = self._band_xml(kind, spec)
+                references += f'<w:{kind}Reference w:type="default" r:id="rId{kind.capitalize()}1"/>'
+
         orient = ' w:orient="landscape"' if page["orientation"] == "landscape" else ""
         body += (
             "<w:sectPr>"
-            f'<w:pgSz w:w="{page["w"]}" w:h="{page["h"]}"{orient}/>'
+            + references
+            + f'<w:pgSz w:w="{page["w"]}" w:h="{page["h"]}"{orient}/>'
             f'<w:pgMar w:top="{page["top"]}" w:right="{page["right"]}" '
             f'w:bottom="{page["bottom"]}" w:left="{page["left"]}" '
             'w:header="720" w:footer="720" w:gutter="0"/>'
@@ -592,6 +651,26 @@ class DocxWriter:
             + body
             + "</w:body>"
             + "</w:document>"
+        )
+
+    def _band_xml(self, kind: str, band: dict[str, Any]) -> str:
+        """One paragraph: left, TAB, centre, TAB, right (mirrors PHP DocxWriter::bandXml)."""
+        r_pr = f'<w:rPr><w:color w:val="{band["color"]}"/><w:sz w:val="{_half_points(band["size"])}"/></w:rPr>'
+        tag = "w:hdr" if kind == "header" else "w:ftr"
+        return (
+            xml_declaration()
+            + f'<{tag} xmlns:w="{NS_W}" xmlns:r="{NS_R}">'
+            + "<w:p><w:pPr><w:tabs>"
+            + f'<w:tab w:val="center" w:pos="{self._content_width // 2}"/>'
+            + f'<w:tab w:val="right" w:pos="{self._content_width}"/>'
+            + '</w:tabs><w:spacing w:before="0" w:after="0"/></w:pPr>'
+            + _band_runs(band["left"], r_pr)
+            + f"<w:r>{r_pr}<w:tab/></w:r>"
+            + _band_runs(band["center"], r_pr)
+            + f"<w:r>{r_pr}<w:tab/></w:r>"
+            + _band_runs(band["right"], r_pr)
+            + "</w:p>"
+            + f"</{tag}>"
         )
 
     # ─── Blocks ──────────────────────────────────────────────────────────

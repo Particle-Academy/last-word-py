@@ -319,6 +319,8 @@ class DocxReader:
         self._core_xml: bytes | None = None
         self._styles_xml: bytes | None = None
         self._title: str | None = None
+        # header/footer part name (without leading word/) -> XML bytes.
+        self._band_parts: dict[str, bytes] = {}
 
     # ─── Public ──────────────────────────────────────────────────────────
 
@@ -346,13 +348,94 @@ class DocxReader:
         # differ from what the writer produces unasked, for the same reason
         # table options are: a Letter portrait page at one-inch margins is what
         # every document written before `page` existed contains.
-        page = _parse_page(_first_child_by_name(body, "sectPr")) if body is not None else None
+        sect_pr = _first_child_by_name(body, "sectPr") if body is not None else None
+        page = _parse_page(sect_pr)
+        if sect_pr is not None:
+            for kind in ("header", "footer"):
+                band = self._parse_band(sect_pr, kind)
+                if band is not None:
+                    page = page or {}
+                    page[kind] = band
         if page is not None:
             doc["page"] = page
         doc.update(self._parse_doc_defaults())
 
         doc["blocks"] = blocks
         return doc
+
+    def _parse_band(self, sect_pr: ET.Element, kind: str) -> dict[str, Any] | None:
+        """The section's DEFAULT header or footer as a band. Mirrors PHP DocxReader::parseBand()."""
+        part: bytes | None = None
+        for node in list(sect_pr):
+            if _local(node.tag) == f"{kind}Reference" and _w_attr(node, "type") in ("default", None):
+                target = self._rels.get(_w_attr(node, "id") or "", {}).get("target")
+                part = (
+                    self._band_parts.get(target.replace("\\", "/").lstrip("/"))
+                    if isinstance(target, str)
+                    else None
+                )
+        if part is None:
+            return None
+        root = _parse_xml(part)
+        p = _first_child_by_name(root, "p") if root is not None else None
+        if p is None:
+            return None
+
+        segments = [""]
+        first_run: ET.Element | None = None
+        field: str | bool | None = None  # inside a complex field: its instruction so far
+        # An explicit stack, as the module's other deep walks: nesting is
+        # attacker-supplied. Children are pushed reversed to keep document order.
+        stack: list[ET.Element] = list(p)[::-1]
+        while stack:
+            child = stack.pop()
+            name = _local(child.tag)
+            if name == "fldSimple":
+                segments[-1] += _field_token(_w_attr(child, "instr") or "")
+            elif name == "r":
+                if first_run is None:
+                    first_run = child
+                stack.extend(list(child)[::-1])
+            elif name == "fldChar":
+                kind_ = _w_attr(child, "fldCharType")
+                if kind_ == "begin":
+                    field = ""
+                elif kind_ == "separate" and field is not None:
+                    if isinstance(field, str):
+                        segments[-1] += _field_token(field)
+                    field = False
+                elif kind_ == "end":
+                    field = None
+            elif name == "instrText" and isinstance(field, str):
+                field += _text_content(child)
+            elif field is None and name == "t":
+                segments[-1] += _text_content(child)
+            elif field is None and name == "tab":
+                segments.append("")
+            elif name in ("hyperlink", "smartTag"):
+                stack.extend(list(child)[::-1])
+
+        if len(segments) == 1:
+            jc = _w_attr(_first_child_by_name(_first_child_by_name(p, "pPr"), "jc"), "val") or ""
+            slot = "center" if jc == "center" else "right" if jc in ("right", "end") else "left"
+            slots = {slot: segments[0]}
+        elif len(segments) == 2:
+            slots = {"left": segments[0], "right": segments[1]}
+        else:
+            slots = {"left": segments[0], "center": segments[1], "right": " ".join(segments[2:])}
+
+        band: dict[str, Any] = {k: slots[k] for k in ("left", "center", "right") if slots.get(k, "") != ""}
+        if not band:
+            return None
+
+        r_pr = _first_child_by_name(first_run, "rPr") if first_run is not None else None
+        sz = _w_attr(_first_child_by_name(r_pr, "sz"), "val")
+        if is_numeric(sz) and int(php_float(sz)) != 18:
+            band["size"] = int(php_float(sz)) / 2
+        color = (_w_attr(_first_child_by_name(r_pr, "color"), "val") or "").upper()
+        if _HEX6_BARE_RE.match(color) and color != "6B7280":
+            band["color"] = "#" + color
+        return band
 
     def _parse_doc_defaults(self) -> dict[str, Any]:
         """`defaultFont` / `defaultSize` from styles.xml, defaults omitted."""
@@ -416,9 +499,12 @@ class DocxReader:
             )
 
             self._media = {}
+            self._band_parts = {}
             for name in archive.namelist():
                 if name.startswith("word/media/"):
                     self._media[name[len("word/") :]] = archive.read(name)
+                if _BAND_PART_RE.match(name):
+                    self._band_parts[name[len("word/") :]] = archive.read(name)
 
         return document_xml
 
@@ -1157,6 +1243,16 @@ def _assemble_list(entries: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 # ─── DOM helpers ─────────────────────────────────────────────────────────
+
+
+_BAND_PART_RE = re.compile(r"^word/(header|footer)\d*\.xml$")
+_HEX6_BARE_RE = re.compile(r"^[0-9A-F]{6}$")
+
+
+def _field_token(instr: str) -> str:
+    """A field instruction as a band token: PAGE -> {page}, NUMPAGES -> {pages}, else ''."""
+    word = re.split(r"[ \\]", instr.strip())[0].upper() if instr.strip() else ""
+    return {"PAGE": "{page}", "NUMPAGES": "{pages}", "SECTIONPAGES": "{pages}"}.get(word, "")
 
 
 def _first_child_by_name(parent: ET.Element | None, local_name: str) -> ET.Element | None:

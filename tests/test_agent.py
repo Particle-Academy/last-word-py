@@ -29,6 +29,7 @@ def test_exports_a_json_schema_for_llm_tool_registration() -> None:
         "boxBorders",
         "tableBorders",
         "boxSides",
+        "band",
         "block",
     }
     assert len(schema["$defs"]["block"]["oneOf"]) == len(Schema.BLOCK_TYPES)

@@ -25,6 +25,7 @@ from .schema import Schema
 
 _HEX6 = re.compile(r"^#[0-9A-Fa-f]{6}$")
 _IMAGE_SRC = re.compile(r"^data:image/(png|jpe?g);base64,")
+_HEX_BAND_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
 
 
 def _error(path: str, message: str) -> dict[str, str]:
@@ -157,6 +158,26 @@ class Validator:
                     errors,
                 )
                 _check_sides(page.get("margins"), "page.margins", "page margins", errors)
+                for kind in ("header", "footer"):
+                    band = page.get(kind)
+                    if band is None:
+                        continue
+                    if not isinstance(band, (dict, list)):
+                        errors.append(
+                            _error(f"page.{kind}", f"page {kind} must be an object ({{left?, center?, right?, size?, color?}})")
+                        )
+                        continue
+                    if isinstance(band, list):
+                        continue
+                    for slot in ("left", "center", "right"):
+                        if band.get(slot) is not None and not isinstance(band[slot], str):
+                            errors.append(_error(f"page.{kind}.{slot}", f"page {kind} {slot} must be text"))
+                    size = band.get("size")
+                    if size is not None and (not is_numeric(size) or php_float(size) <= 0):
+                        errors.append(_error(f"page.{kind}.size", f"page {kind} size must be a positive number of points"))
+                    color = band.get("color")
+                    if color is not None and not (isinstance(color, str) and _HEX_BAND_RE.match(color)):
+                        errors.append(_error(f"page.{kind}.color", f"page {kind} color must be #RRGGBB"))
 
         if "title" in doc and not isinstance(doc["title"], str):
             errors.append(_error("title", "title must be a string when present"))
