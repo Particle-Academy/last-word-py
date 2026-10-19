@@ -17,6 +17,8 @@ verbatim with both mirrors.
 
 from __future__ import annotations
 
+from importlib import resources
+
 import os
 import re
 from pathlib import Path
@@ -374,3 +376,11 @@ def _collect_runs(runs: Any, text: list[str]) -> None:
     for run in runs:
         if isinstance(run, dict) and isinstance(run.get("text"), str):
             text.append(run["text"])
+
+
+def guide() -> str:
+    """The agent guide: what makes this kind of file professional, and the schema
+    idioms that produce it. Give it to a model with the schema; it works with any
+    agent loop. Byte-identical to the PHP package's agent-guide/professional-documents.md
+    (tests/test_agent_guide.py pins the hash)."""
+    return resources.files(__package__).joinpath("agent_guide.md").read_text("utf-8")

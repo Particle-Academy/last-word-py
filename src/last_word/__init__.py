@@ -43,6 +43,7 @@ from .agent import (
     to_markdown,
     validate,
     validate_and_repair,
+    guide,
     version,
     write,
 )
@@ -77,6 +78,7 @@ __all__ = [
     "to_markdown",
     "validate",
     "validate_and_repair",
+    "guide",
     "version",
     "write",
     # Low-level peers, named as in PHP and TypeScript
