@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..helpers import chart as chart_model
 from ..helpers.php import is_numeric, php_float, php_str, php_truthy
 
 #: Characters backslash-escaped in plain text. Backslash goes FIRST or the
@@ -68,6 +69,8 @@ class ToMarkdown:
             return self._quote(block)
         if block_type == "image":
             return self._image(block)
+        if block_type == "chart":
+            return self._chart(block)
         if block_type == "pageBreak":
             return "<!-- pagebreak -->"
         if block_type == "hr":
@@ -89,6 +92,41 @@ class ToMarkdown:
             if php_truthy(children) and isinstance(children, list):
                 lines.extend(self._list(children, ordered, depth + 1))
         return lines
+
+    def _chart(self, block: dict[str, Any]) -> str | None:
+        """A chart as the data it plots. Mirrors PHP `ToMarkdown::chart()`.
+
+        Its title in bold, then a table with a column of categories and one
+        column per series. (Read back, a paragraph and a table -- not a chart.)
+        """
+        spec = chart_model.spec(block.get("option"))
+        if spec is None:
+            return None
+
+        def cell(text: str) -> dict[str, Any]:
+            return {"blocks": [{"type": "paragraph", "runs": [{"text": text}]}]}
+
+        categories = spec["categories"]
+        rows = [{"cells": [cell(spec["categoryTitle"])] + [cell(s["name"]) for s in spec["series"]]}]
+        count = len(categories)
+        for s in spec["series"]:
+            count = max(count, len(s["values"]))
+        for r in range(count):
+            if r < len(categories):
+                label = categories[r]
+            else:
+                label = str(r + 1) if not categories else ""
+            rows.append(
+                {
+                    "cells": [cell(label)]
+                    + [cell(chart_model.num(s["values"][r]) if r < len(s["values"]) else "") for s in spec["series"]]
+                }
+            )
+
+        table = self._table({"rows": rows})
+        if spec["title"] != "":
+            return self._inline([{"text": spec["title"], "bold": True}]) + "\n\n" + table
+        return table
 
     def _table(self, block: dict[str, Any]) -> str:
         rows = [r for r in _iter_list(block.get("rows")) if isinstance(r, dict)]

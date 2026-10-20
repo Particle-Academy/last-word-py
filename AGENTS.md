@@ -169,6 +169,7 @@ peers' (`.ai/knowledge/last-word-spec.md`, and `documents.md` §5.4 for 9–11):
 | `test_reader_tolerance.py` | vector 5 — Word-authored files, plus the DOCTYPE and depth guards |
 | `test_describe.py` | vector 6 |
 | `test_images.py` | vector 7 — sniffing and the 6.5in cap, asserted on the MODEL |
+| `test_chart.py` | the `chart` block (last-word#4), case for case with PHP's `ChartTest`; `tests/data/charts.json` is the shared fixture `test_parity_php.py` also writes through PHP, workbook parts included |
 | `test_cross_read.py` | a frozen Node-written `.docx` read back |
 | `test_legacy_formats.py` | `.doc` / `.odt` / `.rtf` read as the `.docx` does, held to the PHP read (`tests/data/formats/report.read.json`) as JSON text; refusals by name; the hostile-input guards on files `tests/legacy_files.py` builds |
 | `test_rtf_reader.py` | the RTF tokenizer's rules one at a time, case for case with PHP and Node |

@@ -52,8 +52,10 @@ import zipfile
 from typing import Any
 from xml.etree import ElementTree as ET
 
+from ..helpers.chart import DEFAULT_ASPECT
 from ..helpers.php import is_numeric, php_float, php_int_round, php_round
 from ..writer.docx_writer import SDT_TAG_CODE, SDT_TAG_QUOTE, split_columns
+from . import chart_reader
 
 #: w:highlight named colors -> hex.
 HIGHLIGHT_COLORS: dict[str, str] = {
@@ -321,6 +323,11 @@ class DocxReader:
         self._title: str | None = None
         # header/footer part name (without leading word/) -> XML bytes.
         self._band_parts: dict[str, bytes] = {}
+        # chart part name (without leading word/) -> XML bytes.
+        self._chart_parts: dict[str, bytes] = {}
+        # The section's text column in twips, read before any block so a chart
+        # that spans it -- the writer's default -- reads back without a size.
+        self._content_width = 9360
 
     # ─── Public ──────────────────────────────────────────────────────────
 
@@ -338,6 +345,9 @@ class DocxReader:
         # pre-0.2.0 legacy slot -- the first top-level Title-styled paragraph --
         # is consumed instead (see _parse_block_container).
         self._title = self._parse_core_title()
+        self._content_width = _content_width_of(
+            _first_child_by_name(body, "sectPr") if body is not None else None
+        )
         blocks = self._parse_block_container(body, True) if body is not None else []
 
         doc: dict[str, Any] = {}
@@ -500,7 +510,10 @@ class DocxReader:
 
             self._media = {}
             self._band_parts = {}
+            self._chart_parts = {}
             for name in archive.namelist():
+                if _CHART_PART_RE.match(name):
+                    self._chart_parts[name[len("word/") :]] = archive.read(name)
                 if name.startswith("word/media/"):
                     self._media[name[len("word/") :]] = archive.read(name)
                 if _BAND_PART_RE.match(name):
@@ -1171,7 +1184,7 @@ class DocxReader:
     def _parse_drawing(self, drawing: ET.Element) -> dict[str, Any] | None:
         blip = _first_descendant_by_name(drawing, "blip")
         if blip is None:
-            return None
+            return self._parse_chart_drawing(drawing)
         rid = _w_attr(blip, "embed") or _w_attr(blip, "link")
         target = self._rels.get(rid, {}).get("target") if rid is not None else None
         if target is None:
@@ -1207,6 +1220,63 @@ class DocxReader:
             image["alt"] = descr
 
         return image
+
+    def _parse_chart_drawing(self, drawing: ET.Element) -> dict[str, Any] | None:
+        """A drawing holding a chart, back as a chart block. Mirrors PHP `parseChartDrawing()`.
+
+        None for any drawing that is not a chart this package can model -- the
+        drawing is skipped, the read carries on.
+        """
+        graphic_data = _first_descendant_by_name(drawing, "graphicData")
+        if graphic_data is None or graphic_data.get("uri") != chart_reader.NS_C:
+            return None
+        chart = _first_child_by_name(graphic_data, "chart")
+        rid = _w_attr(chart, "id")
+        target = self._rels.get(rid, {}).get("target") if rid is not None else None
+        if target is None:
+            return None
+        target = target.lstrip("/").removeprefix("word/")
+        raw = self._chart_parts.get(target)
+        read = chart_reader.read(raw) if raw is not None else None
+        if read is None:
+            return None
+
+        block: dict[str, Any] = {"type": "chart", "option": read["option"]}
+
+        # The size, unless it is exactly what the writer gives a chart that
+        # names none: the text column, DEFAULT_ASPECT as tall.
+        extent = _first_descendant_by_name(drawing, "extent")
+        cx = int(_leading_int(extent.get("cx", "0"))) if extent is not None else 0
+        cy = int(_leading_int(extent.get("cy", "0"))) if extent is not None else 0
+        column = self._content_width * 635
+        if cx > 0 and cy > 0 and not (cx == column and cy == php_int_round(column * DEFAULT_ASPECT)):
+            block["widthPx"] = php_int_round(cx / 9525)
+            block["heightPx"] = php_int_round(cy / 9525)
+        if read["numberFormat"] is not None:
+            block["numberFormat"] = read["numberFormat"]
+        doc_pr = _first_descendant_by_name(drawing, "docPr")
+        descr = doc_pr.get("descr") if doc_pr is not None else None
+        if isinstance(descr, str) and descr != "":
+            block["alt"] = descr
+
+        return block
+
+
+def _content_width_of(sect_pr: ET.Element | None) -> int:
+    """Twips between the margins: page width less left and right. Mirrors PHP `contentWidthOf()`."""
+    if sect_pr is None:
+        return 9360
+
+    def twips(el: ET.Element | None, name: str, default: int) -> int:
+        value = _w_attr(el, name)
+        return int(php_float(value)) if value is not None and is_numeric(value) else default
+
+    width = twips(_first_child_by_name(sect_pr, "pgSz"), "w", 12240)
+    pg_mar = _first_child_by_name(sect_pr, "pgMar")
+    return max(1, width - twips(pg_mar, "left", 1440) - twips(pg_mar, "right", 1440))
+
+
+_CHART_PART_RE = re.compile(r"^word/charts/[^/]+\.xml$")
 
 
 # ─── Lists ───────────────────────────────────────────────────────────────

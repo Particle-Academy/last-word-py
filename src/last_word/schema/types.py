@@ -88,6 +88,20 @@ class ImageBlock(TypedDict, total=False):
     alt: str
 
 
+class ChartBlock(TypedDict, total=False):
+    """A native Word chart drawn from an Apache ECharts option (dark-slide's `option`)."""
+
+    type: Literal["chart"]
+    option: dict[str, Any]
+    widthPx: float
+    heightPx: float
+    #: Width as a percentage of the text column, when widthPx is absent.
+    width: float
+    #: An Excel number format: "#,##0", "0.0%".
+    numberFormat: str
+    alt: str
+
+
 class PageBreakBlock(TypedDict, total=False):
     type: Literal["pageBreak"]
 
@@ -104,6 +118,7 @@ Block = (
     | CodeBlock
     | QuoteBlock
     | ImageBlock
+    | ChartBlock
     | PageBreakBlock
     | HrBlock
 )
@@ -136,6 +151,7 @@ class WriteResult(TypedDict):
 __all__ = [
     "Alignment",
     "Block",
+    "ChartBlock",
     "CodeBlock",
     "Doc",
     "HeadingBlock",

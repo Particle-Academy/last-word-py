@@ -51,6 +51,7 @@ unions — exactly what an agent emits:
 | code | `{"type": "code", "language"?, "text"}` |
 | quote | `{"type": "quote", "blocks": […]}` |
 | image | `{"type": "image", "src": "data:image/png;base64,…", "widthPx"?, "heightPx"?, "alt"?}` |
+| chart | `{"type": "chart", "option": <ECharts option>, "widthPx"?, "heightPx"?, "width"? (% of column), "numberFormat"?, "alt"?}` — a native, editable Word chart (bar / column / line / pie) with an embedded workbook; `option` is the same field dark-slide's chart takes |
 | pageBreak | `{"type": "pageBreak"}` |
 | hr | `{"type": "hr"}` |
 

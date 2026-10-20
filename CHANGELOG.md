@@ -11,6 +11,44 @@ minor.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-20
+
+A minor release. Pre-1.0, breaking changes may land in a minor (see above); this
+one has none.
+
+### Added
+
+- **A native `chart` block** (last-word#4), the same as `particle-academy/last-word`
+  0.10.0 and `@particle-academy/last-word` 0.10.0. Bar (vertical columns or
+  horizontal bars), line and pie charts are written as real Word charts: a
+  `word/charts/chartN.xml` part inline in the text, with an embedded workbook so
+  Word's "Edit Data" opens the numbers. The block takes an Apache ECharts
+  `option`, the same field dark-slide's chart element takes, so one prompt
+  teaches charts in both formats:
+  `{"type": "chart", "option": {"xAxis": {"type": "category", "data": ["Q1", "Q2"]}, "yAxis": {"type": "value", "name": "USD (k)"}, "series": [{"type": "bar", "name": "Revenue", "data": [120, 135]}]}, "numberFormat": "#,##0"}`.
+  A category `yAxis` gives horizontal bars; a series `stack` stacks bars;
+  `label.show` draws data labels; `itemStyle.color` and `option.color` colour a
+  series, a slice or one highlighted point; `title`, `legend` and each axis
+  `name` are honoured. Sized by `widthPx` / `heightPx`, or `width` as a
+  percentage of the text column, or the full column at 0.6 of its width as
+  tall. `numberFormat` is an Excel number format; `alt` the alternative text.
+  New TypedDict `ChartBlock`; the model lives in `last_word.helpers.chart`.
+- **The reader reads charts back** into the same block, in a canonical form
+  (colours on each series, omitted when they are the default palette's;
+  stacking as `stack: "total"`; the legend as `{"show": true}`; a percentage
+  width as the `widthPx` / `heightPx` it resolved to). A chart it cannot map is
+  skipped, never a failed read.
+- **Agents learn it from the package**: `validate()`, `validate_and_repair()`
+  (the `{chartType, categories, series: [{name, values, color}]}` shorthand and
+  `series[].values`), `json_schema()`, `guide()` (the guide's hash moves in all
+  three engines) and `to_markdown()` (a chart renders as its data table) all
+  know the block. Messages and paths are PHP's verbatim.
+- Not supported, and a validation error: scatter, area and combination charts.
+
+**Nothing to do**: a document without a chart writes the same bytes as before.
+`tests/test_parity_php.py` holds every chart part, the embedded workbook's
+included, byte-identical to the PHP writer.
+
 ## [0.5.0] - 2026-10-19
 
 ### Added

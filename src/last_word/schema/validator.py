@@ -20,6 +20,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from ..helpers.chart import SUPPORTED_TYPES as SUPPORTED_CHART_TYPES
+from ..helpers.chart import point_value
 from ..helpers.php import debug_type, is_list, is_numeric, php_float
 from .schema import Schema
 
@@ -64,6 +66,148 @@ def _check_enum(
 ) -> None:
     if value is not None and value not in allowed:
         errors.append(_error(path, f"{label} must be one of: " + ", ".join(allowed)))
+
+
+def _validate_chart(block: dict, path: str, errors: list[dict[str, str]]) -> None:
+    """A chart block. Mirrors PHP `Validator::validateChart()`, messages and paths verbatim.
+
+    Everything `helpers.chart.spec()` needs to draw is checked here, so a valid
+    chart is always a drawable one.
+    """
+    for dim in ("widthPx", "heightPx"):
+        value = block.get(dim)
+        if value is not None and (not _is_number(value) or value <= 0):
+            errors.append(_error(f"{path}.{dim}", f"{dim} must be a positive number of px when present"))
+    width = block.get("width")
+    if width is not None and (not _is_number(width) or width <= 0 or width > 100):
+        errors.append(
+            _error(
+                f"{path}.width",
+                "chart width must be a percentage of the text column, above 0 and at most 100",
+            )
+        )
+    number_format = block.get("numberFormat")
+    if number_format is not None and (not isinstance(number_format, str) or number_format == ""):
+        errors.append(
+            _error(
+                f"{path}.numberFormat",
+                'numberFormat must be an Excel number format string, e.g. "#,##0" or "0.0%"',
+            )
+        )
+    if block.get("alt") is not None and not isinstance(block["alt"], str):
+        errors.append(_error(f"{path}.alt", "alt must be a string when present"))
+
+    option = block.get("option")
+    if not isinstance(option, dict):
+        errors.append(
+            _error(
+                f"{path}.option",
+                'chart requires an "option" object: an Apache ECharts option, e.g. {"xAxis": '
+                '{"type": "category", "data": ["Q1", "Q2"]}, "yAxis": {"type": "value"}, "series": '
+                '[{"type": "bar", "name": "Revenue", "data": [120, 135]}]}',
+            )
+        )
+        return
+    opt_path = f"{path}.option"
+
+    series = option.get("series")
+    if isinstance(series, dict) and series:
+        series = [series]
+    if not isinstance(series, list) or not series:
+        errors.append(
+            _error(f"{opt_path}.series", 'chart option requires "series": a list of {type, name, data} objects')
+        )
+        return
+
+    supported = ", ".join(SUPPORTED_CHART_TYPES)
+    kind: str | None = None
+    for i, one in enumerate(series):
+        ser_path = f"{opt_path}.series[{i}]"
+        if not isinstance(one, dict):
+            errors.append(_error(ser_path, "a series must be an object ({type, name, data})"))
+            continue
+        series_type = one.get("type")
+        if series_type is None:
+            series_type = "bar"
+        if not isinstance(series_type, str) or series_type not in SUPPORTED_CHART_TYPES:
+            what = f'"{series_type}"' if isinstance(series_type, str) else "that"
+            errors.append(
+                _error(
+                    f"{ser_path}.type",
+                    f"series type must be one of: {supported} (a document chart cannot draw {what})",
+                )
+            )
+            continue
+        if kind is None:
+            kind = series_type
+        elif series_type != kind:
+            errors.append(
+                _error(
+                    f"{ser_path}.type",
+                    f'every series in a chart must be the same type: this one is "{series_type}", '
+                    f'the first is "{kind}"',
+                )
+            )
+        name = one.get("name")
+        if name is not None and not isinstance(name, str) and not _is_number(name):
+            errors.append(_error(f"{ser_path}.name", "series name must be a string"))
+        item_style = one.get("itemStyle")
+        _check_hex(
+            item_style.get("color") if isinstance(item_style, dict) else None,
+            f"{ser_path}.itemStyle.color",
+            "series colour",
+            errors,
+        )
+
+        data = one.get("data")
+        if not isinstance(data, list):
+            hint = ' (ECharts calls it "data", not "values")' if one.get("values") is not None else ""
+            errors.append(_error(f"{ser_path}.data", 'series requires a "data" list of numbers' + hint))
+            continue
+        for p, point in enumerate(data):
+            if point_value(point) is None:
+                errors.append(
+                    _error(
+                        f"{ser_path}.data[{p}]",
+                        'a pie point must be {"name": string, "value": number}'
+                        if series_type == "pie"
+                        else 'a point must be a number, or {"value": number}',
+                    )
+                )
+                continue
+            if isinstance(point, dict):
+                point_style = point.get("itemStyle")
+                _check_hex(
+                    point_style.get("color") if isinstance(point_style, dict) else None,
+                    f"{ser_path}.data[{p}].itemStyle.color",
+                    "point colour",
+                    errors,
+                )
+    if kind == "pie" and len(series) > 1:
+        errors.append(_error(f"{opt_path}.series", "a pie chart takes exactly one series"))
+
+    for key in ("xAxis", "yAxis"):
+        axis = option.get(key)
+        if axis is None:
+            continue
+        if isinstance(axis, list) and axis:
+            axis = axis[0]
+        if not isinstance(axis, dict):
+            errors.append(_error(f"{opt_path}.{key}", f"{key} must be an object ({{type, data, name}})"))
+            continue
+        _check_enum(axis.get("type"), f"{opt_path}.{key}.type", f"{key} type", ("category", "value"), errors)
+        if axis.get("data") is not None and not isinstance(axis["data"], list):
+            errors.append(_error(f"{opt_path}.{key}.data", f"{key}.data must be a list of category labels"))
+        if axis.get("name") is not None and not isinstance(axis["name"], str):
+            errors.append(_error(f"{opt_path}.{key}.name", f"{key}.name (the axis title) must be a string"))
+
+    colors = option.get("color")
+    if colors is not None:
+        if not isinstance(colors, list):
+            errors.append(_error(f"{opt_path}.color", "option.color must be a list of #RRGGBB colours"))
+        else:
+            for c, color in enumerate(colors):
+                _check_hex(color, f"{opt_path}.color[{c}]", "palette colour", errors)
 
 
 def _check_sides(value: Any, path: str, label: str, errors: list[dict[str, str]]) -> None:
@@ -234,6 +378,8 @@ class Validator:
             self._validate_quote(block, path, errors)
         elif block_type == "image":
             self._validate_image(block, path, errors)
+        elif block_type == "chart":
+            _validate_chart(block, path, errors)
         # pageBreak / hr carry nothing to check.
 
     def _validate_heading(self, block: dict, path: str, errors: list[dict[str, str]]) -> None:

@@ -1,0 +1,131 @@
+{
+  "_comment": "Chart blocks in their CANONICAL form: the exact shape DocxReader returns, so read(write(doc)) == doc holds for each. Shared verbatim by last-word-js and last-word-py, whose parity suites write every case through both engines.",
+  "column": {
+    "title": "Column",
+    "blocks": [
+      { "type": "paragraph", "runs": [{ "text": "Figure 1. Revenue by quarter" }] },
+      {
+        "type": "chart",
+        "option": {
+          "title": { "text": "Revenue by quarter" },
+          "legend": { "show": true },
+          "xAxis": { "type": "category", "data": ["Q1", "Q2", "Q3", "Q4"], "name": "Quarter" },
+          "yAxis": { "type": "value", "name": "USD (thousands)" },
+          "series": [
+            { "type": "bar", "name": "2025", "data": [120, 135, 150, 170] },
+            { "type": "bar", "name": "2026", "label": { "show": true }, "itemStyle": { "color": "#1F3A5F" }, "data": [130, 150, 171.5, 190] }
+          ]
+        },
+        "widthPx": 600,
+        "heightPx": 320,
+        "numberFormat": "#,##0",
+        "alt": "Revenue by quarter, 2025 against 2026"
+      }
+    ]
+  },
+  "horizontalBar": {
+    "blocks": [
+      {
+        "type": "chart",
+        "option": {
+          "title": { "text": "Headcount by region" },
+          "xAxis": { "type": "value", "name": "People" },
+          "yAxis": { "type": "category", "data": ["EMEA", "Americas", "APAC"], "name": "Region" },
+          "series": [
+            { "type": "bar", "name": "Headcount", "data": [42, { "value": 57, "itemStyle": { "color": "#DC2626" } }, 31] }
+          ]
+        },
+        "widthPx": 480,
+        "heightPx": 240
+      }
+    ]
+  },
+  "stackedColumn": {
+    "blocks": [
+      {
+        "type": "chart",
+        "option": {
+          "legend": { "show": true },
+          "xAxis": { "type": "category", "data": ["Jan", "Feb", "Mar"] },
+          "yAxis": { "type": "value" },
+          "series": [
+            { "type": "bar", "name": "New", "stack": "total", "data": [5, 7, 9] },
+            { "type": "bar", "name": "Returning", "stack": "total", "label": { "show": true }, "data": [11, 12, 15] }
+          ]
+        }
+      }
+    ]
+  },
+  "line": {
+    "blocks": [
+      {
+        "type": "chart",
+        "option": {
+          "title": { "text": "Churn" },
+          "legend": { "show": true },
+          "xAxis": { "type": "category", "data": ["W1", "W2", "W3", "W4", "W5"] },
+          "yAxis": { "type": "value", "name": "Rate" },
+          "series": [
+            { "type": "line", "name": "Actual", "smooth": true, "data": [0.052, 0.048, 0.051, 0.044, 0.039] },
+            { "type": "line", "name": "Target", "itemStyle": { "color": "#94A3B8" }, "data": [0.05, 0.05, 0.045, 0.045, 0.04] }
+          ]
+        },
+        "numberFormat": "0.0%",
+        "widthPx": 560,
+        "heightPx": 300
+      }
+    ]
+  },
+  "pie": {
+    "blocks": [
+      {
+        "type": "chart",
+        "option": {
+          "title": { "text": "Spend by category" },
+          "legend": { "show": true },
+          "series": [
+            {
+              "type": "pie",
+              "name": "Spend",
+              "label": { "show": true },
+              "data": [
+                { "name": "Payroll", "value": 61 },
+                { "name": "Cloud", "value": 22, "itemStyle": { "color": "#0F766E" } },
+                { "name": "Travel", "value": 9.5 },
+                { "name": "Other", "value": 7.5 }
+              ]
+            }
+          ]
+        },
+        "widthPx": 400,
+        "heightPx": 300
+      }
+    ]
+  },
+  "minimal": {
+    "blocks": [
+      {
+        "type": "chart",
+        "option": {
+          "xAxis": { "type": "category", "data": ["A", "B"] },
+          "yAxis": { "type": "value" },
+          "series": [{ "type": "bar", "data": [1, 2.5] }]
+        }
+      }
+    ]
+  },
+  "numbers": {
+    "blocks": [
+      {
+        "type": "chart",
+        "option": {
+          "xAxis": { "type": "category", "data": ["a", "b", "c", "d", "e", "f"] },
+          "yAxis": { "type": "value" },
+          "series": [{ "type": "line", "name": "Edge values", "data": [-1.25, 0.1, 1234567.891, 3.0e-7, -42, 1.0e+16] }]
+        },
+        "widthPx": 300,
+        "heightPx": 200
+      }
+    ]
+  }
+}

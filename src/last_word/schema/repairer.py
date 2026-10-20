@@ -31,8 +31,9 @@ from ..helpers.php import (
     php_str,
     php_truthy,
 )
+from ..helpers.chart import label as chart_label
 from .schema import Schema
-from .validator import _HEX6, _IMAGE_SRC
+from .validator import _HEX6, _IMAGE_SRC, Validator
 
 
 class Repairer:
@@ -113,6 +114,8 @@ class Repairer:
             return self._repair_quote(block, path)
         if block_type == "image":
             return self._repair_image(block, path)
+        if block_type == "chart":
+            return self._repair_chart(block, path)
         if block_type == "pageBreak":
             return {"type": "pageBreak"}
         return {"type": "hr"}
@@ -269,6 +272,60 @@ class Repairer:
             self._note(f"{path}.alt", "dropped non-string alt")
         return block
 
+    def _repair_chart(self, block: dict[str, Any], path: str) -> dict[str, Any] | None:
+        """A chart block. Mirrors PHP `Repairer::repairChart()`.
+
+        Repairs the SHORTHAND an agent reaches for -- `{chartType, title,
+        categories, series: [{name, values, color}]}`, where `chartType` takes
+        Word's words (column, bar = horizontal, line, pie) -- into the ECharts
+        option it stands for, and `series[].values` into `data`. A chart that
+        still cannot be drawn is dropped, with the reason kept.
+        """
+        if not isinstance(block.get("option"), dict) and isinstance(block.get("series"), list):
+            block = _chart_from_shorthand(block)
+            self._note(
+                f"{path}.option",
+                "converted the chart shorthand (chartType / categories / series[].values) to an ECharts option",
+            )
+
+        option = block.get("option")
+        if isinstance(option, dict) and isinstance(option.get("series"), list):
+            option = dict(option)
+            series_list = list(option["series"])
+            for i, series in enumerate(series_list):
+                if isinstance(series, dict) and series.get("data") is None and isinstance(series.get("values"), list):
+                    series = {k: v for k, v in series.items() if k != "values"}
+                    series["data"] = series_list[i]["values"]
+                    series_list[i] = series
+                    self._note(
+                        f"{path}.option.series[{i}].data",
+                        'renamed series "values" to "data", as ECharts names it',
+                    )
+            option["series"] = series_list
+            block["option"] = option
+
+        for dim in ("widthPx", "heightPx"):
+            value = block.get(dim)
+            if value is not None and (not _is_number(value) or value <= 0):
+                del block[dim]
+                self._note(f"{path}.{dim}", f"dropped invalid {dim}")
+        width = block.get("width")
+        if width is not None and (not _is_number(width) or width <= 0 or width > 100):
+            del block["width"]
+            self._note(f"{path}.width", "dropped invalid chart width")
+        number_format = block.get("numberFormat")
+        if number_format is not None and (not isinstance(number_format, str) or number_format == ""):
+            del block["numberFormat"]
+            self._note(f"{path}.numberFormat", "dropped invalid numberFormat")
+        if block.get("alt") is not None and not isinstance(block["alt"], str):
+            del block["alt"]
+            self._note(f"{path}.alt", "dropped non-string alt")
+
+        if Validator().validate({"blocks": [block]}):
+            self._note(path, "dropped a chart that cannot be drawn (see Agent::validate() for why)")
+            return None
+        return block
+
     # ─── Runs ────────────────────────────────────────────────────────────
 
     def _repair_runs(self, owner: dict[str, Any], path: str) -> list[dict[str, Any]]:
@@ -323,3 +380,59 @@ class Repairer:
 
     def _note(self, path: str, message: str) -> None:
         self._notes.append({"path": path, "message": message})
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _chart_from_shorthand(block: dict[str, Any]) -> dict[str, Any]:
+    """`{chartType, title, categories, series: [{name, values, color}]}` as the chart block it stands for."""
+    chart_type = block["chartType"].lower() if isinstance(block.get("chartType"), str) else "column"
+    series_type = {"line": "line", "pie": "pie"}.get(chart_type, "bar")
+    categories = list(block["categories"]) if isinstance(block.get("categories"), list) else []
+
+    series: list[dict[str, Any]] = []
+    for one in block["series"]:
+        if not isinstance(one, dict):
+            continue
+        out: dict[str, Any] = {"type": series_type}
+        if one.get("name") is not None:
+            out["name"] = one["name"]
+        if isinstance(one.get("values"), list):
+            values = list(one["values"])
+        elif isinstance(one.get("data"), list):
+            values = list(one["data"])
+        else:
+            values = []
+        if series_type == "pie":
+            data = []
+            for i, value in enumerate(values):
+                name = chart_label(categories[i]) if i < len(categories) else None
+                data.append({"name": name if name is not None else f"Slice {i + 1}", "value": value})
+            out["data"] = data
+        else:
+            out["data"] = values
+        if isinstance(one.get("color"), str):
+            out["itemStyle"] = {"color": one["color"]}
+        series.append(out)
+
+    option: dict[str, Any] = {}
+    if isinstance(block.get("title"), str) and block["title"] != "":
+        option["title"] = {"text": block["title"]}
+    if series_type != "pie":
+        category = {"type": "category", "data": categories}
+        value_axis = {"type": "value"}
+        if chart_type == "bar":
+            option["xAxis"] = value_axis
+            option["yAxis"] = category
+        else:
+            option["xAxis"] = category
+            option["yAxis"] = value_axis
+    option["series"] = series
+
+    out_block: dict[str, Any] = {"type": "chart", "option": option}
+    for key in ("widthPx", "heightPx", "width", "numberFormat", "alt"):
+        if key in block:
+            out_block[key] = block[key]
+    return out_block

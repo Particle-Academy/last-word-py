@@ -58,8 +58,10 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
+from ..helpers import chart as chart_model
 from ..helpers import image_size
 from ..helpers.php import is_numeric, php_float, php_int_round, php_str, php_truthy
+from . import chart_part
 from ..helpers.xml import attr as xml_attr
 from ..helpers.xml import declaration as xml_declaration
 from ..helpers.xml import text as xml_text
@@ -70,8 +72,17 @@ NS_WP = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
 NS_A = "http://schemas.openxmlformats.org/drawingml/2006/main"
 NS_PIC = "http://schemas.openxmlformats.org/drawingml/2006/picture"
 
+NS_C = "http://schemas.openxmlformats.org/drawingml/2006/chart"
+
 #: EMU per pixel at 96dpi.
 EMU_PER_PX = 9525
+
+#: EMU per twip: the text column is measured in twips, a drawing in EMU.
+EMU_PER_TWIP = 635
+
+#: A chart's drawing id is offset from the images' so the two can never collide;
+#: Word treats a repeated wp:docPr id as a damaged document. Shared with PHP.
+CHART_DOCPR_BASE = 10000
 
 #: Max image width: 6.5in (letter width minus 1in margins) in EMU.
 MAX_IMAGE_WIDTH_EMU = 5943600
@@ -414,6 +425,8 @@ class DocxWriter:
         self._media_files: dict[str, bytes] = {}
         self._rel_counter = 2
         self._image_counter = 0
+        # Chart parts queued for the archive, in chart order (chart N is index N-1).
+        self._charts: list[dict[str, Any]] = []
         # Ordered-list numbering instances allocated (numIds 2..N+1).
         self._ordered_list_count = 0
         # Twips between the page margins; set from `page` before any block
@@ -445,6 +458,7 @@ class DocxWriter:
         self._media_files = {}
         self._rel_counter = 2
         self._image_counter = 0
+        self._charts = []
         self._ordered_list_count = 0
 
         has_title = "title" in doc
@@ -475,20 +489,17 @@ class DocxWriter:
         )
         for archive_path, raw in self._media_files.items():
             parts.append((archive_path, raw))
+        for n, chart in enumerate(self._charts, start=1):
+            parts.append((f"word/charts/chart{n}.xml", chart["xml"].encode("utf-8")))
+            parts.append((f"word/charts/_rels/chart{n}.xml.rels", chart["rels"].encode("utf-8")))
+            parts.append(
+                (
+                    f"word/embeddings/Microsoft_Excel_Worksheet{n}.xlsx",
+                    _zip_parts([(name, xml.encode("utf-8")) for name, xml in chart["workbook"]]),
+                )
+            )
 
-        buffer = io.BytesIO()
-        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
-            for name, payload in parts:
-                info = zipfile.ZipInfo(name, date_time=FIXED_DATE_TIME)
-                # ZipInfo picks create_system from the host platform, which
-                # would make the same document produce different bytes on
-                # Windows and Linux. Pin it.
-                info.create_system = 0
-                info.external_attr = 0
-                info.compress_type = zipfile.ZIP_DEFLATED
-                archive.writestr(info, payload)
-
-        return buffer.getvalue()
+        return _zip_parts(parts)
 
     # ─── Parts ───────────────────────────────────────────────────────────
 
@@ -506,6 +517,11 @@ class DocxWriter:
         xml += '<Default Extension="xml" ContentType="application/xml"/>'
         xml += '<Default Extension="png" ContentType="image/png"/>'
         xml += '<Default Extension="jpeg" ContentType="image/jpeg"/>'
+        if self._charts:
+            xml += (
+                '<Default Extension="xlsx" ContentType="application/vnd.openxmlformats-'
+                'officedocument.spreadsheetml.sheet"/>'
+            )
         xml += (
             '<Override PartName="/word/document.xml" ContentType="application/vnd.'
             'openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
@@ -522,6 +538,11 @@ class DocxWriter:
             xml += (
                 f'<Override PartName="/word/{kind}1.xml" ContentType="application/vnd.'
                 f'openxmlformats-officedocument.wordprocessingml.{kind}+xml"/>'
+            )
+        for n in range(1, len(self._charts) + 1):
+            xml += (
+                f'<Override PartName="/word/charts/chart{n}.xml" ContentType="application/vnd.'
+                'openxmlformats-officedocument.drawingml.chart+xml"/>'
             )
         if has_title:
             xml += (
@@ -595,6 +616,13 @@ class DocxWriter:
                     'officeDocument/2006/relationships/hyperlink" Target="'
                     + xml_attr(rel["target"])
                     + '" TargetMode="External"/>'
+                )
+            elif rel["type"] == "chart":
+                xml += (
+                    f'<Relationship Id="{rid}" Type="http://schemas.openxmlformats.org/'
+                    'officeDocument/2006/relationships/chart" Target="'
+                    + xml_attr(rel["target"])
+                    + '"/>'
                 )
             else:
                 xml += (
@@ -701,6 +729,8 @@ class DocxWriter:
                 xml += self._render_quote(block)
             elif block_type == "image":
                 xml += self._render_image(block)
+            elif block_type == "chart":
+                xml += self._render_chart(block)
             elif block_type == "pageBreak":
                 xml += '<w:p><w:r><w:br w:type="page"/></w:r></w:p>'
             elif block_type == "hr":
@@ -981,6 +1011,82 @@ class DocxWriter:
             "</w:drawing></w:r></w:p>"
         )
 
+    def _render_chart(self, block: dict[str, Any]) -> str:
+        """A native chart, inline, in its own paragraph. Mirrors PHP `renderChart()`.
+
+        An option nothing can be drawn from (validation stops those before here)
+        degrades to its title as text rather than vanishing.
+        """
+        option = block.get("option")
+        spec = chart_model.spec(option)
+        if spec is None:
+            label = chart_model.title(option.get("title") if isinstance(option, dict) else None)
+            text = "[chart" + (f": {label}" if label != "" else "") + "]"
+            return '<w:p><w:r><w:t xml:space="preserve">' + xml_text(text) + "</w:t></w:r></w:p>"
+        number_format = block.get("numberFormat")
+        if not isinstance(number_format, str) or number_format == "":
+            number_format = None
+
+        n = len(self._charts) + 1
+        self._charts.append(
+            {
+                "xml": chart_part.chart_xml(spec, number_format),
+                "rels": chart_part.rels_xml(n),
+                "workbook": chart_part.workbook_parts(spec, number_format),
+            }
+        )
+        self._rel_counter += 1
+        rid = f"rId{self._rel_counter}"
+        self._rels[rid] = {"type": "chart", "target": f"charts/chart{n}.xml"}
+
+        cx, cy = self._chart_extents(block)
+        alt = block.get("alt")
+        descr = f' descr="{xml_attr(alt)}"' if isinstance(alt, str) and alt != "" else ""
+
+        return (
+            "<w:p><w:r><w:drawing>"
+            '<wp:inline distT="0" distB="0" distL="0" distR="0">'
+            f'<wp:extent cx="{cx}" cy="{cy}"/>'
+            '<wp:effectExtent l="0" t="0" r="0" b="0"/>'
+            f'<wp:docPr id="{CHART_DOCPR_BASE + n}" name="Chart {n}"{descr}/>'
+            "<wp:cNvGraphicFramePr/>"
+            f'<a:graphic><a:graphicData uri="{NS_C}">'
+            f'<c:chart xmlns:c="{NS_C}" r:id="{rid}"/>'
+            "</a:graphicData></a:graphic>"
+            "</wp:inline>"
+            "</w:drawing></w:r></w:p>"
+        )
+
+    def _chart_extents(self, block: dict[str, Any]) -> tuple[int, int]:
+        """A chart's extents in EMU. Mirrors PHP `chartExtents()`.
+
+        Width: widthPx, else `width` percent of the text column, else the whole
+        column -- never wider than the column. Height: heightPx (scaled with the
+        width when the width was capped), else DEFAULT_ASPECT of the width.
+        """
+
+        def number(value: Any) -> float | None:
+            return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+        col = self._content_width * EMU_PER_TWIP
+        width_px = number(block.get("widthPx"))
+        height_px = number(block.get("heightPx"))
+        percent = number(block.get("width"))
+
+        cx = col
+        if width_px is not None and width_px > 0:
+            cx = php_int_round(width_px * EMU_PER_PX)
+        elif percent is not None and percent > 0:
+            cx = php_int_round(col * min(100.0, percent) / 100)
+        cy = php_int_round(height_px * EMU_PER_PX) if height_px is not None and height_px > 0 else None
+
+        if cx > col:
+            if cy is not None:
+                cy = php_int_round(cy * col / cx)
+            cx = col
+        cx = max(1, cx)
+        return cx, max(1, cy if cy is not None else php_int_round(cx * chart_model.DEFAULT_ASPECT))
+
     @staticmethod
     def _parse_data_url(src: str) -> tuple[str, bytes] | None:
         match = _DATA_URL_RE.match(src)
@@ -1256,6 +1362,26 @@ class DocxWriter:
             xml += f'<w:num w:numId="{2 + i}"><w:abstractNumId w:val="1"/></w:num>'
         xml += "</w:numbering>"
         return xml
+
+
+def _zip_parts(parts: list[tuple[str, bytes]]) -> bytes:
+    """A deterministic package: the document itself, or a chart's embedded workbook.
+
+    Fixed entry order, a fixed DOS date and a pinned create_system, so a document
+    with a chart is as reproducible as one without.
+    """
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name, payload in parts:
+            info = zipfile.ZipInfo(name, date_time=FIXED_DATE_TIME)
+            # ZipInfo picks create_system from the host platform, which would
+            # make the same document produce different bytes on Windows and
+            # Linux. Pin it.
+            info.create_system = 0
+            info.external_attr = 0
+            info.compress_type = zipfile.ZIP_DEFLATED
+            archive.writestr(info, payload)
+    return buffer.getvalue()
 
 
 def _nn(value: Any, default: Any) -> Any:

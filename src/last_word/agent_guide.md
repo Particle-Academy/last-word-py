@@ -79,6 +79,17 @@ genre, lead with what the reader must know or decide, and analyse rather than re
   `cellPadding:{top:4, bottom:4, left:6, right:6}`; borders: a bottom rule per row
   (`insideH`) and no vertical lines.
 - Lists: `{type:"list", ordered:true, items:[{runs:[...]}]}` with `spaceAfter:4` on items.
+- Charts are native Word charts, editable in Word:
+  `{type:"chart", option:{xAxis:{type:"category", data:["Q1","Q2","Q3"]}, yAxis:{type:"value", name:"USD (thousands)"}, series:[{type:"bar", name:"Revenue", data:[120,135,150]}]}, numberFormat:"#,##0"}`.
+  `option` is an Apache ECharts option, the same one a dark-slide chart takes. Column chart:
+  a category `xAxis`. Horizontal bars: swap the axes (category `yAxis`, value `xAxis`). Line:
+  `type:"line"`. Pie: `series:[{type:"pie", data:[{name:"Payroll", value:61}, {name:"Cloud", value:22}]}]`
+  and no axes. Several series: add `legend:{show:true}`; one series needs none. Highlight the
+  finding by colouring one point, `{value:57, itemStyle:{color:"#DC2626"}}`, over a muted
+  series colour. Only bar, line and pie draw. The chart spans the text column unless
+  `width` (a percentage) or `widthPx`/`heightPx` say otherwise.
+  Caption it like a table: "Figure 1. ..." in a paragraph above with `keepNext:true`, and
+  a source line below. A chart illustrates the table's figures; it does not replace them.
 - Keep a heading with its content: `keepNext:true` on every heading.
 
 ## Recipes
