@@ -11,6 +11,8 @@ minor.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-27
+
 Mirrors `particle-academy/last-word` ea82312.
 
 ### Added
