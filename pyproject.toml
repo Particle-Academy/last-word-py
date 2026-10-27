@@ -44,6 +44,9 @@ dev = ["pytest>=8.0"]
 # the .agi envelope -- and CI puts its checkout of the pinned tag on PYTHONPATH.
 test = ["pytest>=8.0"]
 
+[project.scripts]
+last-word = "last_word.cli:main"
+
 [project.urls]
 Homepage = "https://github.com/Particle-Academy/last-word-py"
 Repository = "https://github.com/Particle-Academy/last-word-py"

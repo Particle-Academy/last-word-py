@@ -11,6 +11,50 @@ minor.
 
 ## [Unreleased]
 
+Mirrors `particle-academy/last-word` ea82312.
+
+### Added
+
+- **Word `.dotx` and LibreOffice `.ott` templates.** `read()` reads them exactly
+  as their `.docx` / `.odt` twins and adds `"sourceKind": "template"` as the
+  last key. Document reads are unchanged and carry no `sourceKind` key.
+- **`convert_template(bytes_or_path, to=None)`** and the `last-word` script
+  (`python -m last_word` too): `template:convert <in> <out>
+  [--to=document|template] [--force]` turns a template into its document twin
+  and back. Only the declaration is rewritten: the main part's content-type
+  value (OOXML), or the `mimetype` entry plus the manifest root's `media-type`
+  (ODF 1.3 Part 2 section 3.3 requires them to agree). Every other member is
+  copied as its original zip record; `mimetype` stays first and stored. The
+  whole output archive is byte-identical to PHP's.
+- `ArchiveRefused` and `OfficeTemplateRefused`, each with a constant `reason`,
+  exported from `last_word`.
+
+### Changed
+
+- **A macro-enabled template (`.dotm`) is now refused** with
+  `OfficeTemplateRefused("macro_enabled")`; it used to be read as a document
+  with its VBA silently ignored. So is a `.dotx` carrying a `vbaProject.bin`.
+  A `.docm` still reads as before but is never converted.
+- A package declaring a template of another family (a PowerPoint or Excel
+  template type, an ODF `presentation-template`, a `text-template` whose body is
+  a spreadsheet) is refused with `family_mismatch`.
+
+### Security
+
+- **`.docx` and `.odt` archives are now validated before they are read**, with
+  the bounds and reason codes the PHP and Node engines have had since 0.10.1:
+  64 MiB per part, 256 MiB expanded, 16,384 members, 1000:1 expansion, safe
+  member names, no duplicates, consistent local/central headers, CRC and size
+  checked, inflation bounded by the declared size. Before this the `.docx`
+  reader opened anything `zipfile` would and inflated every part with no bound,
+  so a small upload could expand to gigabytes. Refusals raise `ArchiveRefused`,
+  a `RuntimeError` subclass, so code catching `RuntimeError` for a damaged file
+  keeps working; only the MESSAGE changed (`"Not a readable DOCX (zip) archive."`,
+  `"Could not open the ODT archive."` and `"ODT part ... is too large to read."`
+  are now `"Source archive refused: <reason>"`). Branch on `.reason`. Zip64,
+  encrypted, and "version needed > 2.0" archives are refused as
+  `archive_unsupported`, as they already were by PHP and Node.
+
 ## [0.6.0] - 2026-10-20
 
 A minor release. Pre-1.0, breaking changes may land in a minor (see above); this

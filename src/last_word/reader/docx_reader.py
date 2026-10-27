@@ -46,12 +46,12 @@ never throws on strange input.
 from __future__ import annotations
 
 import base64
-import io
 import re
-import zipfile
 from typing import Any
 from xml.etree import ElementTree as ET
 
+from ..archive import office_template
+from ..archive.source_archive import SourceArchive
 from ..helpers.chart import DEFAULT_ASPECT
 from ..helpers.php import is_numeric, php_float, php_int_round, php_round
 from ..writer.docx_writer import SDT_TAG_CODE, SDT_TAG_QUOTE, split_columns
@@ -328,6 +328,7 @@ class DocxReader:
         # The section's text column in twips, read before any block so a chart
         # that spans it -- the writer's default -- reads back without a size.
         self._content_width = 9360
+        self._source_kind = office_template.DOCUMENT
 
     # ─── Public ──────────────────────────────────────────────────────────
 
@@ -371,6 +372,9 @@ class DocxReader:
         doc.update(self._parse_doc_defaults())
 
         doc["blocks"] = blocks
+        # A .dotx reads exactly like its .docx twin, and says so.
+        if self._source_kind == office_template.TEMPLATE:
+            doc["sourceKind"] = office_template.TEMPLATE
         return doc
 
     def _parse_band(self, sect_pr: ET.Element, kind: str) -> dict[str, Any] | None:
@@ -475,49 +479,39 @@ class DocxReader:
     def _open_archive(self, data: bytes) -> bytes:
         """Pull the parts we need out of the zip and return document.xml.
 
-        In memory -- unlike PHP, which must stage the bytes to a temp file
-        because `ZipArchive` only opens a path.
+        Read only verified payloads: archive validation (`SourceArchive`, the
+        same bounds and reason codes as PHP and Node) precedes XML parsing, so a
+        zip bomb, an unsafe member name or a lying header is refused with
+        `ArchiveRefused` before anything is inflated past its declared size.
         """
-        try:
-            archive = zipfile.ZipFile(io.BytesIO(data))
-        except (zipfile.BadZipFile, OSError) as exc:
-            raise RuntimeError("Not a readable DOCX (zip) archive.") from exc
+        archive = SourceArchive.open(data)
+        self._source_kind = office_template.kind(archive)
 
-        with archive:
-            names = set(archive.namelist())
-            if "word/document.xml" not in names:
-                raise RuntimeError("No word/document.xml part — not a DOCX file.")
-            document_xml = archive.read("word/document.xml")
+        document_xml = archive.read("word/document.xml")
+        if document_xml is None:
+            raise RuntimeError("No word/document.xml part — not a DOCX file.")
 
-            rels_xml = archive.read("word/_rels/document.xml.rels") if (
-                "word/_rels/document.xml.rels" in names
-            ) else None
-            self._rels = self._parse_rels(rels_xml) if rels_xml is not None else {}
+        rels_xml = archive.read("word/_rels/document.xml.rels")
+        self._rels = self._parse_rels(rels_xml) if rels_xml is not None else {}
 
-            numbering_xml = archive.read("word/numbering.xml") if (
-                "word/numbering.xml" in names
-            ) else None
-            self._numbering = (
-                self._parse_numbering(numbering_xml) if numbering_xml is not None else {}
-            )
+        numbering_xml = archive.read("word/numbering.xml")
+        self._numbering = (
+            self._parse_numbering(numbering_xml) if numbering_xml is not None else {}
+        )
 
-            self._core_xml = (
-                archive.read("docProps/core.xml") if "docProps/core.xml" in names else None
-            )
-            self._styles_xml = (
-                archive.read("word/styles.xml") if "word/styles.xml" in names else None
-            )
+        self._core_xml = archive.read("docProps/core.xml")
+        self._styles_xml = archive.read("word/styles.xml")
 
-            self._media = {}
-            self._band_parts = {}
-            self._chart_parts = {}
-            for name in archive.namelist():
-                if _CHART_PART_RE.match(name):
-                    self._chart_parts[name[len("word/") :]] = archive.read(name)
-                if name.startswith("word/media/"):
-                    self._media[name[len("word/") :]] = archive.read(name)
-                if _BAND_PART_RE.match(name):
-                    self._band_parts[name[len("word/") :]] = archive.read(name)
+        self._media = {}
+        self._band_parts = {}
+        self._chart_parts = {}
+        for name in archive.names():
+            if _CHART_PART_RE.match(name):
+                self._chart_parts[name[len("word/") :]] = archive.read(name)  # type: ignore[assignment]
+            if name.startswith("word/media/"):
+                self._media[name[len("word/") :]] = archive.read(name)  # type: ignore[assignment]
+            if _BAND_PART_RE.match(name):
+                self._band_parts[name[len("word/") :]] = archive.read(name)  # type: ignore[assignment]
 
         return document_xml
 

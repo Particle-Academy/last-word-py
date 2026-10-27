@@ -24,7 +24,8 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .exceptions import SchemaException, UnsupportedFormatException
+from .archive import office_template
+from .exceptions import ArchiveRefused, SchemaException, UnsupportedFormatException
 from .helpers.php import PHP_TRIM_CHARS
 from .markdown.from_markdown import FromMarkdown
 from .markdown.to_markdown import ToMarkdown
@@ -198,6 +199,58 @@ def read(bytes_or_path: bytes | bytearray | str | os.PathLike[str]) -> dict[str,
         f"This is a .{detected} file, not a word-processing document. "
         "read() reads .docx, .doc (Word 97-2003), .odt and .rtf.",
     )
+
+
+#: PHP `Reader\FileInput::MAX_BYTES`: a path is read no further than this.
+_MAX_INPUT_BYTES = 67108864
+
+
+def _bounded_bytes(bytes_or_path: bytes | bytearray | str | os.PathLike[str]) -> bytes:
+    """Bytes, whether handed bytes or a path; a path is read with PHP's 64 MiB bound."""
+    if isinstance(bytes_or_path, (bytes, bytearray)):
+        return bytes(bytes_or_path)
+    if isinstance(bytes_or_path, (str, os.PathLike)):
+        candidate = Path(bytes_or_path)
+        try:
+            is_file = candidate.is_file()
+        except (OSError, ValueError):
+            is_file = False
+        if is_file:
+            with candidate.open("rb") as handle:
+                data = handle.read(_MAX_INPUT_BYTES + 1)
+            if len(data) > _MAX_INPUT_BYTES:
+                raise ArchiveRefused("archive_limit")
+            return data
+    raise ValueError("convert_template() expects package bytes or a path to a package file.")
+
+
+def convert_template(
+    bytes_or_path: bytes | bytearray | str | os.PathLike[str], to: str | None = None
+) -> bytes:
+    """Turn a Word `.dotx` / LibreOffice `.ott` template into its `.docx` / `.odt`
+    twin, or back. `to` is `"document"`, `"template"`, or None to flip.
+
+    Only the declaration moves: the main part's content type in
+    `[Content_Types].xml`, or the ODF `mimetype` entry together with the
+    manifest's root media-type (ODF 1.3 requires them to agree). Every other
+    member is copied as its original zip record, byte for byte; no reader or
+    writer is in the path, so nothing is reflowed or lost.
+
+    Macro-enabled packages (.dotm, .docm) are refused, never converted.
+
+    Raises `OfficeTemplateRefused`, `ArchiveRefused`, and
+    `UnsupportedFormatException` for anything that is not a Word or ODF text
+    package -- as PHP's `Agent::convertTemplate()`.
+    """
+    data = _bounded_bytes(bytes_or_path)
+    detected = _format.detect(data)
+    if detected not in (_format.DOCX, _format.ODT):
+        raise UnsupportedFormatException(
+            detected,
+            "convert_template() converts Word (.dotx/.docx) and OpenDocument text (.ott/.odt) packages"
+            + ("; these bytes are neither." if detected == _format.UNKNOWN else f"; this is a .{detected} file."),
+        )
+    return office_template.convert(data, to)
 
 
 def from_bytes(data: bytes | bytearray) -> dict[str, Any]:

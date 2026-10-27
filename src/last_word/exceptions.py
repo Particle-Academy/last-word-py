@@ -35,3 +35,42 @@ class UnsupportedFormatException(ValueError):
     def __init__(self, format: str, message: str) -> None:  # noqa: A002 - the peers' name
         super().__init__(message)
         self.format = format
+
+
+class ArchiveRefused(RuntimeError):
+    """A source archive refused by the bounded reader, with a constant `reason`.
+
+    Mirrors PHP `LastWord\\Exceptions\\ArchiveRefused` and Node's: the message never
+    echoes archive names or document content. Branch on `reason`:
+    `archive_limit`, `archive_path`, `archive_duplicate`, `archive_corrupt`,
+    `archive_unsupported`, `archive_limits`, `archive_io`. A `RuntimeError`, as a
+    damaged file always was here.
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__("Source archive refused: " + reason)
+        self.reason = reason
+
+
+_TEMPLATE_MESSAGES = {
+    "macro_enabled": "Macro-enabled templates (.dotm) are refused: re-save it as a .dotx in Word.",
+    "family_mismatch": "This package declares a template of a different kind than its contents.",
+    "already_template": "This package is already a template.",
+    "already_document": "This package is already a document.",
+    "not_convertible": "This package has no single content-type declaration that can be rewritten.",
+    "odf_mimetype": "An OpenDocument package must store its mimetype entry first and uncompressed.",
+    "bad_target": 'The conversion target must be "document" or "template".',
+}
+
+
+class OfficeTemplateRefused(RuntimeError):
+    """An Office or LibreOffice template package refused, with a constant `reason`.
+
+    Mirrors PHP `LastWord\\Exceptions\\OfficeTemplateRefused`: `macro_enabled`,
+    `family_mismatch`, `already_template`, `already_document`, `not_convertible`,
+    `odf_mimetype`, `bad_target`. Branch on `reason`; the message is for people.
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(f"Template refused ({reason}): " + _TEMPLATE_MESSAGES.get(reason, reason))
+        self.reason = reason

@@ -65,6 +65,17 @@ def damaged(data: bytes, message: str) -> None:
     assert message in str(caught.value)
 
 
+def archive_refused(data: bytes, reason: str) -> None:
+    """An unsafe archive is refused by the guard with a constant reason -- still a
+    RuntimeError, so "damaged" and "unsupported" stay distinguishable."""
+    from last_word.exceptions import ArchiveRefused
+
+    with pytest.raises(ArchiveRefused) as caught:
+        last_word.read(data)
+    assert isinstance(caught.value, RuntimeError)
+    assert caught.value.reason == reason
+
+
 def hello() -> bytes:
     return L.cfb(L.word(b"Hello\r"))
 
@@ -290,13 +301,15 @@ def test_caps_the_cells_odt_repeat_attributes_can_add_in_total() -> None:
 def test_refuses_an_odt_part_that_declares_more_than_64_mb() -> None:
     content = "<office:document-content>" + " " * (65 * 1024 * 1024) + "</office:document-content>"
     data = L.zip_of({"mimetype": "application/vnd.oasis.opendocument.text", "content.xml": content}, deflate=("content.xml",))
-    damaged(data, "ODT part content.xml is too large to read")
+    # Refused by the archive guard, from the central directory, before any
+    # inflation: the same reason code PHP and Node give.
+    archive_refused(data, "archive_limit")
 
 
 def test_a_zip_bomb_that_lies_about_its_size_never_inflates_past_the_lie() -> None:
-    # The entry claims 100 bytes and inflates to 65 MB. zipfile stops reading at
-    # the declared size and the CRC then fails, so it is refused as damaged
-    # without the 65 MB ever being produced.
+    # The entry claims 100 bytes and inflates to 65 MB. The inflater is bounded
+    # by the declared size plus one byte, so the lie is caught as corruption
+    # without the 65 MB ever being produced (Node: "bounds ODT inflation").
     content = " " * (65 * 1024 * 1024)
     data = bytearray(L.zip_of({"mimetype": "application/vnd.oasis.opendocument.text", "content.xml": content}, deflate=("content.xml",)))
     local = data.index(b"PK\x03\x04", 4)
@@ -304,7 +317,7 @@ def test_a_zip_bomb_that_lies_about_its_size_never_inflates_past_the_lie() -> No
     central = data.index(b"PK\x01\x02")
     central = data.index(b"PK\x01\x02", central + 4)
     struct.pack_into("<I", data, central + 24, 100)
-    damaged(bytes(data), "Could not open the ODT archive")
+    archive_refused(bytes(data), "archive_corrupt")
 
 
 def test_refuses_rtf_nested_past_any_real_document() -> None:

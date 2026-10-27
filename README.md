@@ -123,6 +123,40 @@ encrypted file, `xls`, `ppt`, `msg` or `cfb` for another compound file, `xlsx`,
 `pptx`, `ods`, `odp`, or `unknown`. A damaged file in a supported format raises
 `RuntimeError` instead.
 
+`.docx` and `.odt` archives are validated before anything is parsed, with the
+same limits as the PHP and Node engines: 64 MiB per part, 256 MiB expanded,
+16,384 members, 1000:1 expansion. Corrupt, duplicate, unsafe or unsupported
+members raise `ArchiveRefused` (a `RuntimeError`) with a constant `reason`.
+
+## Word and LibreOffice templates (.dotx, .ott)
+
+A `.dotx` is a `.docx` whose main part is declared a template; an `.ott` is an
+`.odt` whose `mimetype` (and manifest root entry) says `text-template`. `read()`
+reads both exactly as it reads their twins and adds `"sourceKind": "template"`.
+A document read has no `sourceKind` key.
+
+```python
+last_word.read("letterhead.dotx")              # {..., "sourceKind": "template"}
+last_word.convert_template("letterhead.dotx")  # .docx bytes ("document" | "template" | None = flip)
+```
+
+```
+last-word template:convert letterhead.dotx letterhead.docx
+python -m last_word template:convert memo.odt memo.ott --to=template
+```
+
+Conversion rewrites only the declaration: the content-type value in
+`[Content_Types].xml`, or the ODF `mimetype` entry plus the manifest's root
+`media-type` (ODF 1.3 requires the two to match). Every other member is copied
+as its original zip record, byte for byte, and `mimetype` stays first and
+stored. The output archive is byte-identical to the PHP engine's
+(`tests/test_template_parity_php.py`).
+
+Refused with `OfficeTemplateRefused` (a constant `reason`): macro-enabled
+templates `.dotm` (`macro_enabled`; never read, never converted, and a `.docm`
+is not converted either), and a package declaring a template of another family
+or whose parts disagree with its declaration (`family_mismatch`).
+
 ## Document versions as ops
 
 A version history cannot keep a .docx per edit, and hashing the bytes cannot

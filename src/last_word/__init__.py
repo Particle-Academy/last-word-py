@@ -30,6 +30,7 @@ from __future__ import annotations
 
 from . import agent
 from .agent import (
+    convert_template,
     describe,
     diff,
     equivalent,
@@ -47,7 +48,7 @@ from .agent import (
     version,
     write,
 )
-from .exceptions import SchemaException, UnsupportedFormatException
+from .exceptions import ArchiveRefused, OfficeTemplateRefused, SchemaException, UnsupportedFormatException
 from .markdown.from_markdown import FromMarkdown
 from .markdown.to_markdown import ToMarkdown
 from .ops import DocDiff, DocOpSchema, DocReducer
@@ -65,6 +66,7 @@ __version__ = version()
 __all__ = [
     # The Agent surface
     "agent",
+    "convert_template",
     "describe",
     "diff",
     "equivalent",
@@ -82,6 +84,7 @@ __all__ = [
     "version",
     "write",
     # Low-level peers, named as in PHP and TypeScript
+    "ArchiveRefused",
     "DocDiff",
     "DocOpSchema",
     "DocReader",
@@ -90,6 +93,7 @@ __all__ = [
     "DocxWriter",
     "FromMarkdown",
     "OdtReader",
+    "OfficeTemplateRefused",
     "Repairer",
     "RtfReader",
     "Schema",

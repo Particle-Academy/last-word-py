@@ -21,9 +21,10 @@ sizes and colours, sections' layout and page geometry.
 
 ## Hostile input
 
-A part carrying a DOCTYPE is refused before it is parsed. Only the three parts
-read are decompressed, each refused past 64 MB whether declared or actual (the
-read is streamed and stops at the cap, so a zip bomb never inflates). Repeated
+A part carrying a DOCTYPE is refused before it is parsed. The archive is
+validated by `SourceArchive` first (PHP's and Node's bounds and reason codes:
+64 MB per part, 1000:1 expansion, safe member names, consistent headers), and
+every inflation is bounded by the declared size, so a zip bomb never inflates. Repeated
 rows and columns are capped, each repeat at 1,000 and all of them together at
 100,000 cells. Element nesting is bounded by the parser (257, as libxml), which
 keeps the recursive walks here far below Python's frame limit.
@@ -31,12 +32,11 @@ keeps the recursive walks here far below Python's frame limit.
 
 from __future__ import annotations
 
-import io
 import re
-import zipfile
-import zlib
 from typing import Any
 
+from ..archive import office_template
+from ..archive.source_archive import SourceArchive
 from ..helpers.php import PHP_TRIM_CHARS, is_numeric
 from .odt.xml_dom import Element, parse_dom, text_content
 from .structure import clamp, has_text, lists, merge_runs, php_int
@@ -63,6 +63,7 @@ class OdtReader:
         self._automatic_styles: dict[str, Element] = {}
         self._list_styles: dict[str, Element] = {}
         self._repeated_cells = 0
+        self._source_kind = office_template.DOCUMENT
 
     def read(self, data: bytes) -> dict[str, Any]:
         parts = self._parts(data)
@@ -86,30 +87,21 @@ class OdtReader:
             doc["title"] = text_content(title).strip(PHP_TRIM_CHARS)
 
         doc["blocks"] = self._blocks(body, 0) if body is not None else []
+        # An .ott reads exactly like its .odt twin, and says so.
+        if self._source_kind == office_template.TEMPLATE:
+            doc["sourceKind"] = office_template.TEMPLATE
         return doc
 
     # ─── Archive ──────────────────────────────────────────────────────────
 
-    @staticmethod
-    def _parts(data: bytes) -> dict[str, str]:
+    def _parts(self, data: bytes) -> dict[str, str]:
+        archive = SourceArchive.open(data, {"maxPartBytes": _MAX_PART_BYTES})
+        self._source_kind = office_template.kind(archive)
         parts: dict[str, str] = {}
-        try:
-            with zipfile.ZipFile(io.BytesIO(data)) as archive:
-                names = set(archive.namelist())
-                for name in _PARTS:
-                    if name not in names:
-                        continue
-                    if archive.getinfo(name).file_size > _MAX_PART_BYTES:
-                        raise _TooLarge(name)
-                    with archive.open(name) as stream:
-                        raw = stream.read(_MAX_PART_BYTES + 1)
-                    if len(raw) > _MAX_PART_BYTES:
-                        raise _TooLarge(name)
-                    parts[name] = raw.decode("utf-8", errors="replace").removeprefix(_BOM)
-        except _TooLarge as exc:
-            raise RuntimeError(f"ODT part {exc.name} is too large to read.") from None
-        except (zipfile.BadZipFile, zlib.error, OSError, EOFError, ValueError, NotImplementedError, KeyError, RuntimeError):
-            raise RuntimeError("Could not open the ODT archive.") from None
+        for name in _PARTS:
+            raw = archive.read(name)
+            if raw is not None:
+                parts[name] = raw.decode("utf-8", errors="replace").removeprefix(_BOM)
 
         if "content.xml" not in parts:
             raise RuntimeError("ODT archive has no content.xml.")
@@ -315,12 +307,6 @@ class OdtReader:
             else:
                 # Fields and other inline wrappers display their text content.
                 self._collect(child, flags, link, out, depth + 1)
-
-
-class _TooLarge(Exception):
-    def __init__(self, name: str) -> None:
-        super().__init__(name)
-        self.name = name
 
 
 def _push(out: list[dict[str, Any]], text: str, flags: dict[str, bool], link: str | None, collapsible: bool) -> None:
