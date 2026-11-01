@@ -96,6 +96,56 @@ def _table_props(doc: dict[str, Any]) -> list:
 
 _W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 
+
+def _written_parts(doc: dict[str, Any]) -> dict[str, bytes]:
+    """Every part of a written document, by name."""
+    with zipfile.ZipFile(io.BytesIO(last_word.to_bytes(doc))) as archive:
+        return {name: archive.read(name) for name in archive.namelist()}
+
+
+def _part_root(xml: bytes | None) -> ET.Element | None:
+    return None if xml is None else ET.fromstring(xml)
+
+
+def _footnotes_part(doc: dict[str, Any]) -> dict[str, Any]:
+    """The `footnotesPart` projection, as the manifest defines it."""
+    parts = _written_parts(doc)
+
+    content_type = None
+    for override in _collect(ET.fromstring(parts["[Content_Types].xml"]), "Override"):
+        if override.get("PartName") == "/word/footnotes.xml":
+            content_type = override.get("ContentType")
+    relationship = None
+    for rel in _collect(ET.fromstring(parts["word/_rels/document.xml.rels"]), "Relationship"):
+        if (rel.get("Type") or "").endswith("/footnotes"):
+            relationship = rel.get("Target")
+    settings = _part_root(parts.get("word/settings.xml"))
+    footnote_pr = _child(settings, "footnotePr")
+
+    notes = []
+    root = _part_root(parts.get("word/footnotes.xml"))
+    for node in list(root) if root is not None else []:
+        if _local(node.tag) == "footnote":
+            notes.append(
+                {
+                    "id": node.get(f"{{{_W}}}id", ""),
+                    "type": node.get(f"{{{_W}}}type"),
+                    "text": "".join(t.text or "" for t in _collect(node, "t")),
+                    "content": _norm_props(node),
+                }
+            )
+
+    return {
+        "contentType": content_type,
+        "relationship": relationship,
+        "footnotePr": None if footnote_pr is None else _norm_props(footnote_pr),
+        "references": [
+            r.get(f"{{{_W}}}id", "")
+            for r in _collect(ET.fromstring(parts["word/document.xml"]), "footnoteReference")
+        ],
+        "footnotes": notes,
+    }
+
 EXTRACTORS = {
     "runProps": _run_props,
     "paragraphProps": lambda doc: [
@@ -106,6 +156,7 @@ EXTRACTORS = {
         _norm_props(_child(tc, "tcPr")) for tc in _collect(_document_xml(doc), "tc")
     ],
     "sectionProps": lambda doc: _norm_props(_child(_child(_document_xml(doc), "body"), "sectPr")),
+    "footnotesPart": _footnotes_part,
     "readBack": lambda doc: last_word.read(last_word.to_bytes(doc)),
     # The comparator is the suite's own, so "equal" means the same thing here
     # as it does for every other row.
@@ -152,3 +203,10 @@ def test_the_extractors_discriminate() -> None:
         {"blocks": [{"type": "table", "rows": [{"cells": [{"blocks": []}]}]}]}
     )
     assert shaded != plain
+
+    noted = EXTRACTORS["footnotesPart"](
+        {"blocks": [{"type": "paragraph", "runs": [{"text": "", "footnote": {"blocks": [{"type": "paragraph", "runs": [{"text": "n"}]}]}}]}]}
+    )
+    bare = EXTRACTORS["footnotesPart"]({"blocks": [{"type": "paragraph", "runs": [{"text": "n"}]}]})
+    assert noted != bare
+    assert noted["references"] == ["1"] and bare["references"] == []

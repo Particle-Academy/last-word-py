@@ -41,9 +41,14 @@ class Repairer:
 
     def __init__(self) -> None:
         self._notes: list[dict[str, str]] = []
+        # 'body' or 'footnote': where a footnote run is being repaired, and so
+        # whether it may stay. (PHP has a third, 'band', for a `{blocks}`
+        # header or footer; this port's bands hold no runs.)
+        self._context = "body"
 
     def repair(self, doc: Any) -> dict[str, Any]:
         self._notes = []
+        self._context = "body"
 
         out: dict[str, Any] = dict(doc) if isinstance(doc, dict) else {}
         if not isinstance(doc, dict):
@@ -353,6 +358,9 @@ class Repairer:
                 self._note(run_path, "dropped non-object run")
                 continue
             run = dict(run)
+            if "footnote" in run:
+                out.extend(self._repair_footnote_run(run, run_path))
+                continue
             if not isinstance(run.get("text"), str):
                 if is_scalar(run.get("text")):
                     run["text"] = php_str(run["text"])
@@ -376,6 +384,88 @@ class Repairer:
                 self._note(f"{run_path}.link", "dropped non-string link")
             out.append(run)
 
+        return out
+
+    def _repair_footnote_run(self, run: dict[str, Any], path: str) -> list[dict[str, Any]]:
+        """A footnote run, repaired into what it should have been.
+
+        Text the agent typed on the mark moves to a run of its own before it
+        (losing nothing), a missing `text` becomes "", a bare string or a bare
+        list of blocks is wrapped, and a footnote inside another footnote is
+        dropped with a note. `run` is already this method's own copy.
+        """
+        note = run.pop("footnote")
+        out: list[dict[str, Any]] = []
+        if is_scalar(run.get("text")) and php_str(run["text"]) != "":
+            run["text"] = php_str(run["text"])
+            out.append(run)
+            self._note(f"{path}.text", "moved text typed on a footnote mark into a run of its own before it")
+
+        if self._context != "body":
+            self._note(f"{path}.footnote", "dropped a footnote inside a footnote")
+            return out
+
+        if isinstance(note, str) and note != "":
+            note = {"blocks": [{"type": "paragraph", "runs": [{"text": note}]}]}
+            self._note(f"{path}.footnote", "coerced a string footnote to {blocks: [paragraph]}")
+        elif isinstance(note, list) and note != []:
+            note = {"blocks": note}
+            self._note(f"{path}.footnote", "coerced a list of blocks to {blocks}")
+        blocks: Any = note.get("blocks") if isinstance(note, dict) else None
+        if isinstance(blocks, str) and blocks != "":
+            blocks = [{"type": "paragraph", "runs": [{"text": blocks}]}]
+        if not is_list(blocks):
+            self._note(f"{path}.footnote", "dropped a footnote without blocks")
+            return out
+
+        at = f"{path}.footnote.blocks"
+        self._context = "footnote"
+        try:
+            blocks = self._drop_refused_in_footnote(self._repair_blocks(blocks, at), at)
+        finally:
+            self._context = "body"
+        if blocks == []:
+            self._note(f"{path}.footnote", "dropped a footnote with no blocks left")
+            return out
+        if "text" not in run:
+            self._note(f"{path}.text", 'defaulted a footnote run\'s text to ""')
+        out.append({"text": "", "footnote": {"blocks": blocks}})
+        return out
+
+    def _drop_refused_in_footnote(self, blocks: list[dict[str, Any]], path: str) -> list[dict[str, Any]]:
+        """A footnote's blocks without what a footnote cannot hold, at any depth, each drop noted.
+
+        See `Schema.FOOTNOTE_REFUSED_TYPES`. Builds new containers rather than
+        editing the ones it is given.
+        """
+        out: list[dict[str, Any]] = []
+        for i, block in enumerate(blocks):
+            at = f"{path}[{i}]"
+            block_type = block.get("type")
+            if block_type in Schema.FOOTNOTE_REFUSED_TYPES:
+                self._note(at, f"dropped a {block_type} block: a footnote cannot hold one")
+                continue
+            if block_type == "quote" and isinstance(block.get("blocks"), list):
+                block = {**block, "blocks": self._drop_refused_in_footnote(block["blocks"], f"{at}.blocks")}
+            if block_type == "table" and isinstance(block.get("rows"), list):
+                rows = []
+                for r, row in enumerate(block["rows"]):
+                    cells = row.get("cells") if isinstance(row, dict) else None
+                    if isinstance(cells, list):
+                        new_cells = []
+                        for c, cell in enumerate(cells):
+                            if isinstance(cell, dict) and isinstance(cell.get("blocks"), list):
+                                cell = {
+                                    **cell,
+                                    "blocks": self._drop_refused_in_footnote(
+                                        cell["blocks"], f"{at}.rows[{r}].cells[{c}].blocks"
+                                    ),
+                                }
+                            new_cells.append(cell)
+                        row = {**row, "cells": new_cells}
+                    rows.append(row)
+                block = {**block, "rows": rows}
+            out.append(block)
         return out
 
     def _note(self, path: str, message: str) -> None:

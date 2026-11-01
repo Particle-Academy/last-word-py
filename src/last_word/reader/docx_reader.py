@@ -18,6 +18,9 @@ files:
   - tables (nested blocks in cells), header rows via w:tblHeader
   - images via a:blip r:embed -> data URLs, extents -> widthPx/heightPx
   - page breaks, bottom-border-only paragraphs -> hr
+  - footnotes, through the part the `footnotes` relationship names: any ids,
+    Word's separators and continuation notices skipped, each reference read as
+    `{"text": "", "footnote": {"blocks": [...]}}`
   - unknown constructs degrade to plain paragraphs / get skipped -- the reader
     never throws on strange XML
 
@@ -46,6 +49,8 @@ never throws on strange input.
 from __future__ import annotations
 
 import base64
+import copy
+import posixpath
 import re
 from typing import Any
 from xml.etree import ElementTree as ET
@@ -232,9 +237,14 @@ def _parse_page(sect_pr: ET.Element | None) -> dict[str, Any] | None:
     pg_mar = _first_child_by_name(sect_pr, "pgMar")
     margins: dict[str, Any] = {}
     if pg_mar is not None:
-        for side in BOX_EDGES:
+        # Each value only when it differs from what the writer puts there
+        # unasked -- 1440 twips a side, 720 to the header and the footer -- so a
+        # document read before the distances were read reads the same.
+        # Schema.page_margins() fills the defaults back in for a viewer.
+        for side in (*BOX_EDGES, "header", "footer"):
             value = _w_attr(pg_mar, side)
-            if is_numeric(value) and int(php_float(value)) != 1440:
+            default = 720 if side in ("header", "footer") else 1440
+            if is_numeric(value) and int(php_float(value)) != default:
                 margins[side] = _points_from(php_float(value), 20)
     if margins:
         out["margins"] = margins
@@ -329,11 +339,23 @@ class DocxReader:
         # that spans it -- the writer's default -- reads back without a size.
         self._content_width = 9360
         self._source_kind = office_template.DOCUMENT
+        # The document's footnotes, by `w:id`, from the part its `footnotes`
+        # relationship names: its own `w:footnote` elements (separators and
+        # continuation notices are not footnotes).
+        self._footnote_nodes: dict[str, ET.Element] = {}
+        # The footnotes part's OWN relationships, which resolve its links and images.
+        self._footnote_rels: dict[str, dict[str, Any]] = {}
+        # A footnote's blocks once read, by id: a footnote referenced twice is read once.
+        self._footnote_cache: dict[str, list[dict[str, Any]]] = {}
+        # True while a footnote's blocks are read: a reference inside one is ignored.
+        self._in_footnote = False
 
     # ─── Public ──────────────────────────────────────────────────────────
 
     def read(self, data: bytes) -> dict[str, Any]:
         """Parse DOCX bytes into the Doc model."""
+        self._in_footnote = False
+        self._footnote_cache = {}
         document_xml = self._open_archive(data)
 
         root = _parse_xml(document_xml)
@@ -493,6 +515,7 @@ class DocxReader:
 
         rels_xml = archive.read("word/_rels/document.xml.rels")
         self._rels = self._parse_rels(rels_xml) if rels_xml is not None else {}
+        self._load_footnotes(archive, rels_xml)
 
         numbering_xml = archive.read("word/numbering.xml")
         self._numbering = (
@@ -514,6 +537,68 @@ class DocxReader:
                 self._band_parts[name[len("word/") :]] = archive.read(name)  # type: ignore[assignment]
 
         return document_xml
+
+    def _load_footnotes(self, archive: SourceArchive, rels_xml: bytes | None) -> None:
+        """The footnotes part the document's `footnotes` relationship names, and its own relationships.
+
+        Sized by the archive's own limits, as document.xml is (a long legal
+        document's footnotes outgrow a header's cap); a part declaring a DOCTYPE
+        is not read, and its references then read as nothing. Mirrors PHP
+        `loadFootnotes()`.
+        """
+        self._footnote_nodes = {}
+        self._footnote_rels = {}
+        target = _rel_target_of_type(rels_xml, "footnotes") if rels_xml is not None else None
+        if target is None:
+            return
+        name = "word/" + target.replace("\\", "/").lstrip("/")
+        if target.startswith("/"):
+            name = target.lstrip("/")
+        xml = archive.read(name)
+        if xml is None or b"<!doctype" in xml.lower():
+            return
+        root = _parse_xml(xml)
+        if root is None:
+            return
+        for node in list(root):
+            if _local(node.tag) == "footnote" and _w_attr(node, "type") in (None, "normal"):
+                footnote_id = _w_attr(node, "id")
+                if footnote_id is not None and footnote_id not in self._footnote_nodes:
+                    self._footnote_nodes[footnote_id] = node
+
+        part_rels = archive.read("word/_rels/" + posixpath.basename(name) + ".rels")
+        self._footnote_rels = (
+            self._parse_rels(part_rels)
+            if part_rels is not None and b"<!doctype" not in part_rels.lower()
+            else {}
+        )
+
+    def _footnote_run(self, footnote_id: str) -> dict[str, Any] | None:
+        """The model run for a `w:footnoteReference`: `{text: "", footnote: {blocks}}`.
+
+        Its blocks are read by the body's own block reader against the
+        footnotes part's relationships. None -- nothing in the model -- for a
+        reference inside another footnote (Word allows none), for an id with
+        no footnote, and for a footnote with no content. (A reference in a
+        header or footer never gets here: this port reads a band's text, not
+        its runs.)
+        """
+        if self._in_footnote or footnote_id not in self._footnote_nodes:
+            return None
+        if footnote_id not in self._footnote_cache:
+            rels, self._rels = self._rels, self._footnote_rels
+            self._in_footnote = True
+            try:
+                self._footnote_cache[footnote_id] = self._parse_block_container(
+                    self._footnote_nodes[footnote_id]
+                )
+            finally:
+                self._rels = rels
+                self._in_footnote = False
+        blocks = self._footnote_cache[footnote_id]
+        # A copy each time: a footnote referenced twice must not hand the
+        # caller one list object in two places.
+        return None if blocks == [] else {"text": "", "footnote": {"blocks": copy.deepcopy(blocks)}}
 
     def _parse_core_title(self) -> str | None:
         """dc:title from docProps/core.xml -- None when missing or empty."""
@@ -900,9 +985,9 @@ class DocxReader:
                 continue
             name = _local(node.tag)
             if name == "r":
-                run = self._parse_run(node, current_link, state)
-                if run is not None:
-                    runs.append(run)
+                # A list: one w:r holding text AND a footnote reference
+                # (another producer's spelling) is two runs in the model.
+                runs.extend(self._parse_run(node, current_link, state))
             elif name == "hyperlink":
                 rid = _w_attr(node, "id")
                 target = self._rels.get(rid, {}).get("target") if rid is not None else None
@@ -922,23 +1007,50 @@ class DocxReader:
 
     def _parse_run(
         self, r: ET.Element, link: str | None, state: dict[str, Any]
-    ) -> dict[str, Any] | None:
+    ) -> list[dict[str, Any]]:
+        """One w:r as model runs.
+
+        Usually one, none when it carries no text, and a footnote run where it
+        holds a `w:footnoteReference` (with the text either side of it as runs
+        of their own).
+        """
         props: dict[str, Any] = {}
         r_pr = _first_child_by_name(r, "rPr")
         if r_pr is not None:
             props = self._parse_run_properties(r_pr)
 
+        out: list[dict[str, Any]] = []
         text = ""
         for node in list(r):
             name = _local(node.tag)
             if name == "t":
-                text += _text_content(node)
+                piece = _text_content(node)
+                # The space Word puts between a footnote's own mark and its
+                # text is the mark's, not the text's.
+                if state.get("afterMark", False) and piece != "":
+                    if piece[0] == " ":
+                        piece = piece[1:]
+                    state["afterMark"] = False
+                text += piece
+            elif name == "footnoteRef":
+                # A footnote's own number, inside footnotes.xml: Word draws it.
+                state["afterMark"] = True
+            elif name == "footnoteReference":
+                note = self._footnote_run(_w_attr(node, "id") or "")
+                if note is not None:
+                    if text != "":
+                        out.append(self._run_from(text, props, link))
+                        text = ""
+                    out.append(note)
             elif name == "br":
                 if _w_attr(node, "type") == "page":
                     state["pageBreak"] = True
                 else:
                     text += "\n"
             elif name == "tab":
+                if state.get("afterMark", False):
+                    state["afterMark"] = False  # a tab after the mark is the mark's too
+                    continue
                 text += "\t"
             elif name == "drawing":
                 image = self._parse_drawing(node)
@@ -948,9 +1060,13 @@ class DocxReader:
             # The shipped PHP engine does not handle it, so a Word file with a
             # carriage return loses the break; this port follows PHP.
 
-        if text == "":
-            return None
+        if text != "":
+            out.append(self._run_from(text, props, link))
+        return out
 
+    @staticmethod
+    def _run_from(text: str, props: dict[str, Any], link: str | None) -> dict[str, Any]:
+        """A model run from text and its run properties."""
         run: dict[str, Any] = {"text": text}
         for flag in ("bold", "italic", "underline", "strike", "code", "smallCaps"):
             if props.get(flag):
@@ -1375,9 +1491,12 @@ def _merge_runs(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     merged: list[dict[str, Any]] = []
     for run in runs:
-        if run["text"] == "":
+        # A footnote run's text is always "", and it is never merged: two
+        # identical footnotes in a row are two footnotes.
+        is_note = "footnote" in run
+        if run["text"] == "" and not is_note:
             continue
-        if merged:
+        if merged and not is_note and "footnote" not in merged[-1]:
             a = {k: v for k, v in merged[-1].items() if k != "text"}
             b = {k: v for k, v in run.items() if k != "text"}
             if a == b:
@@ -1385,6 +1504,22 @@ def _merge_runs(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 continue
         merged.append(run)
     return merged
+
+
+def _rel_target_of_type(rels_xml: bytes, rel_type: str) -> str | None:
+    """The target of the first internal relationship whose type ends `/{rel_type}`, or None."""
+    root = _parse_xml(rels_xml)
+    if root is None:
+        return None
+    for node in list(root):
+        if (
+            _local(node.tag) == "Relationship"
+            and (node.get("Type") or "").endswith("/" + rel_type)
+            and (node.get("TargetMode") or "").lower() != "external"
+            and (node.get("Target") or "") != ""
+        ):
+            return node.get("Target")
+    return None
 
 
 def _leading_int(value: str) -> str:

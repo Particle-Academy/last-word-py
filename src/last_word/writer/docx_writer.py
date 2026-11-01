@@ -17,6 +17,9 @@ viable set, in a FIXED entry order:
     word/numbering.xml              (bullet + decimal abstract numbering, 6 indent
                                      levels; one fresh instance per ordered list so
                                      numbering restarts)
+    word/settings.xml               (only with a footnote: w:footnotePr)
+    word/header1.xml, footer1.xml   (only with a running header / footer)
+    word/footnotes.xml              (only with a footnote; + its own _rels)
     word/_rels/document.xml.rels    (styles, numbering, hyperlinks, images)
     word/media/imageN.png|jpeg      (decoded data-URL images)
 
@@ -61,6 +64,7 @@ from typing import Any
 from ..helpers import chart as chart_model
 from ..helpers import image_size
 from ..helpers.php import is_numeric, php_float, php_int_round, php_str, php_truthy
+from ..schema.schema import Schema
 from . import chart_part
 from ..helpers.xml import attr as xml_attr
 from ..helpers.xml import declaration as xml_declaration
@@ -240,7 +244,14 @@ def _margins_xml(wrapper: str, sides: Any) -> str:
 
 
 def page_geometry(page: Any) -> dict[str, Any]:
-    """Page size and margins in twips."""
+    """Page size, margins and the header / footer distances, in twips.
+
+    The distances are `margins.header` / `margins.footer` (Word keeps them on
+    w:pgMar too), 720 when absent. Unsigned in OOXML (ST_TwipsMeasure): an
+    unvalidated negative is 0. PHP's `pageGeometry()` also takes a template's
+    section as a base the document overrides field by field; this port has no
+    template writing, so the base is always the default.
+    """
     page = page if isinstance(page, dict) else {}
     size = page.get("size").lower() if isinstance(page.get("size"), str) else "letter"
     width, height = PAGE_SIZES.get(size, PAGE_SIZES["letter"])
@@ -257,6 +268,10 @@ def page_geometry(page: Any) -> dict[str, Any]:
         value = _twips(margins.get(key))
         return 1440 if value is None else value
 
+    def distance(key: str) -> int:
+        value = _twips(margins.get(key))
+        return 720 if value is None else max(0, value)
+
     return {
         "w": width,
         "h": height,
@@ -264,6 +279,8 @@ def page_geometry(page: Any) -> dict[str, Any]:
         "right": side("right"),
         "bottom": side("bottom"),
         "left": side("left"),
+        "header": distance("header"),
+        "footer": distance("footer"),
         "orientation": orientation,
     }
 
@@ -434,6 +451,23 @@ class DocxWriter:
         self._content_width = 9360
         # The running header / footer parts asked for: kind -> part XML.
         self._bands: dict[str, str] = {}
+        # The document's footnotes, id -> `w:footnote` content (without the
+        # wrapper), numbered 1, 2, 3 in document order as their runs render.
+        # The separator (-1) and continuation separator (0) Word requires are
+        # written around them. Empty without a footnote, and then nothing about
+        # the package changes.
+        self._footnotes: dict[int, str] = {}
+        # word/footnotes.xml's OWN relationships (its links and images),
+        # written as word/_rels/footnotes.xml.rels.
+        self._footnote_rels: dict[str, dict[str, str]] = {}
+        self._footnote_rel_counter = 0
+        # True while a footnote's blocks render: a footnote run inside one
+        # renders as nothing.
+        self._in_footnote = False
+        # Whether this document needs word/settings.xml. In PHP a page colour
+        # or even/odd headers need it too; this port has neither, so only a
+        # footnote does.
+        self._has_settings = False
 
     # ─── Public ──────────────────────────────────────────────────────────
 
@@ -460,6 +494,10 @@ class DocxWriter:
         self._image_counter = 0
         self._charts = []
         self._ordered_list_count = 0
+        self._footnotes = {}
+        self._footnote_rels = {}
+        self._footnote_rel_counter = 0
+        self._in_footnote = False
 
         has_title = "title" in doc
 
@@ -480,10 +518,18 @@ class DocxWriter:
                 )
             )
         parts.append(("word/document.xml", document_xml.encode("utf-8")))
-        parts.append(("word/styles.xml", self._build_styles(doc).encode("utf-8")))
+        parts.append(("word/styles.xml", self._build_styles(doc, bool(self._footnotes)).encode("utf-8")))
         parts.append(("word/numbering.xml", self._build_numbering().encode("utf-8")))
+        if self._has_settings:
+            parts.append(("word/settings.xml", self._build_settings().encode("utf-8")))
         for kind, band_xml in self._bands.items():
             parts.append((f"word/{kind}1.xml", band_xml.encode("utf-8")))
+        if self._footnotes:
+            parts.append(("word/footnotes.xml", self._build_footnotes().encode("utf-8")))
+            if self._footnote_rels:
+                parts.append(
+                    ("word/_rels/footnotes.xml.rels", self._rels_xml(self._footnote_rels).encode("utf-8"))
+                )
         parts.append(
             ("word/_rels/document.xml.rels", self._build_document_rels().encode("utf-8"))
         )
@@ -534,10 +580,20 @@ class DocxWriter:
             '<Override PartName="/word/numbering.xml" ContentType="application/vnd.'
             'openxmlformats-officedocument.wordprocessingml.numbering+xml"/>'
         )
+        if self._has_settings:
+            xml += (
+                '<Override PartName="/word/settings.xml" ContentType="application/vnd.'
+                'openxmlformats-officedocument.wordprocessingml.settings+xml"/>'
+            )
         for kind in self._bands:
             xml += (
                 f'<Override PartName="/word/{kind}1.xml" ContentType="application/vnd.'
                 f'openxmlformats-officedocument.wordprocessingml.{kind}+xml"/>'
+            )
+        if self._footnotes:
+            xml += (
+                '<Override PartName="/word/footnotes.xml" ContentType="application/vnd.'
+                'openxmlformats-officedocument.wordprocessingml.footnotes+xml"/>'
             )
         for n in range(1, len(self._charts) + 1):
             xml += (
@@ -604,12 +660,39 @@ class DocxWriter:
             '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/'
             'officeDocument/2006/relationships/numbering" Target="numbering.xml"/>'
         )
+        if self._has_settings:
+            xml += (
+                '<Relationship Id="rIdSettings" Type="http://schemas.openxmlformats.org/'
+                'officeDocument/2006/relationships/settings" Target="settings.xml"/>'
+            )
+        if self._footnotes:
+            xml += (
+                '<Relationship Id="rIdFootnotes" Type="http://schemas.openxmlformats.org/'
+                'officeDocument/2006/relationships/footnotes" Target="footnotes.xml"/>'
+            )
         for kind in self._bands:
             xml += (
                 f'<Relationship Id="rId{kind.capitalize()}1" Type="http://schemas.openxmlformats.org/'
                 f'officeDocument/2006/relationships/{kind}" Target="{kind}1.xml"/>'
             )
-        for rid, rel in self._rels.items():
+        xml += self._relationships(self._rels)
+        xml += "</Relationships>"
+        return xml
+
+    def _rels_xml(self, rels: dict[str, dict[str, str]]) -> str:
+        """A part's own relationships part. Mirrors PHP `relsXml()`."""
+        return (
+            xml_declaration()
+            + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            + self._relationships(rels)
+            + "</Relationships>"
+        )
+
+    @staticmethod
+    def _relationships(rels: dict[str, dict[str, str]]) -> str:
+        """Hyperlink, chart and image relationships, in the order they were made."""
+        xml = ""
+        for rid, rel in rels.items():
             if rel["type"] == "hyperlink":
                 xml += (
                     f'<Relationship Id="{rid}" Type="http://schemas.openxmlformats.org/'
@@ -631,7 +714,6 @@ class DocxWriter:
                     + xml_attr(rel["target"])
                     + '"/>'
                 )
-        xml += "</Relationships>"
         return xml
 
     def _build_document_xml(self, doc: dict[str, Any]) -> str:
@@ -656,6 +738,9 @@ class DocxWriter:
                 self._bands[kind] = self._band_xml(kind, spec)
                 references += f'<w:{kind}Reference w:type="default" r:id="rId{kind.capitalize()}1"/>'
 
+        # Footnotes are registered as the body renders, above, so they are known here.
+        self._has_settings = bool(self._footnotes)
+
         orient = ' w:orient="landscape"' if page["orientation"] == "landscape" else ""
         body += (
             "<w:sectPr>"
@@ -663,7 +748,7 @@ class DocxWriter:
             + f'<w:pgSz w:w="{page["w"]}" w:h="{page["h"]}"{orient}/>'
             f'<w:pgMar w:top="{page["top"]}" w:right="{page["right"]}" '
             f'w:bottom="{page["bottom"]}" w:left="{page["left"]}" '
-            'w:header="720" w:footer="720" w:gutter="0"/>'
+            f'w:header="{page["header"]}" w:footer="{page["footer"]}" w:gutter="0"/>'
             "</w:sectPr>"
         )
 
@@ -701,6 +786,110 @@ class DocxWriter:
             + f"</{tag}>"
         )
 
+    def _build_settings(self) -> str:
+        """The settings part, written only when something needs it (footnotes).
+
+        CT_Settings is a sequence; PHP writes displayBackgroundShape and
+        evenAndOddHeaders before footnotePr, and this port has neither. The
+        footnotePr names the two separator footnotes, as Word itself writes it.
+        """
+        return (
+            xml_declaration()
+            + f'<w:settings xmlns:w="{NS_W}">'
+            + (
+                '<w:footnotePr><w:footnote w:id="-1"/><w:footnote w:id="0"/></w:footnotePr>'
+                if self._footnotes
+                else ""
+            )
+            + "</w:settings>"
+        )
+
+    # ─── Footnotes ───────────────────────────────────────────────────────
+
+    #: The mark that opens a footnote's own text: Word's FootnoteReference-styled w:footnoteRef.
+    FOOTNOTE_MARK = '<w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><w:footnoteRef/></w:r>'
+
+    def _render_footnote_run(self, run: dict[str, Any]) -> str:
+        """A footnote run: its blocks rendered into the next footnote, and the reference run that marks it.
+
+        Nothing inside another footnote, and nothing for a footnote with no
+        blocks to render (validation refuses both). The blocks render with the
+        footnote part's OWN relationships swapped in, so a link or image in a
+        footnote registers in word/_rels/footnotes.xml.rels. Media share the
+        document's counter, so names and drawing ids stay unique across the
+        package. Mirrors PHP `renderFootnoteRun()`.
+        """
+        note = run.get("footnote")
+        blocks = _iter_list(note.get("blocks")) if isinstance(note, dict) else []
+        if self._in_footnote or not blocks:
+            return ""
+
+        rels, counter = self._rels, self._rel_counter
+        self._rels, self._rel_counter = self._footnote_rels, self._footnote_rel_counter
+        self._in_footnote = True
+        try:
+            content = self._render_blocks(blocks, "FootnoteText")
+        finally:
+            self._footnote_rels, self._footnote_rel_counter = self._rels, self._rel_counter
+            self._rels, self._rel_counter = rels, counter
+            self._in_footnote = False
+        if content == "":
+            return ""
+
+        # The mark opens the first paragraph, after its properties, followed by
+        # the space Word puts between the number and the text. A footnote that
+        # opens with a table or a quote gets a paragraph of its own for the
+        # mark, and one that ends with a table a closing paragraph: a footnote
+        # is a block container, and must end in a paragraph as a cell must.
+        mark = self.FOOTNOTE_MARK + '<w:r><w:t xml:space="preserve"> </w:t></w:r>'
+        if content.startswith("<w:p>"):
+            at = len("<w:p>")
+            if content[at : at + len("<w:pPr>")] == "<w:pPr>":
+                at = content.index("</w:pPr>") + len("</w:pPr>")
+            content = content[:at] + mark + content[at:]
+        else:
+            content = '<w:p><w:pPr><w:pStyle w:val="FootnoteText"/></w:pPr>' + self.FOOTNOTE_MARK + "</w:p>" + content
+        if not content.endswith("</w:p>"):
+            content += '<w:p><w:pPr><w:pStyle w:val="FootnoteText"/></w:pPr></w:p>'
+
+        footnote_id = len(self._footnotes) + 1
+        self._footnotes[footnote_id] = content
+
+        return (
+            '<w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr>'
+            f'<w:footnoteReference w:id="{footnote_id}"/></w:r>'
+        )
+
+    def _build_footnotes(self) -> str:
+        """word/footnotes.xml: the separator (-1) and continuation separator (0), then the document's, from 1.
+
+        Word requires the two separators before any footnote of the document's
+        own -- without them it reports the file as damaged.
+        """
+
+        def separator(kind: str, footnote_id: int, tag: str) -> str:
+            return (
+                f'<w:footnote w:type="{kind}" w:id="{footnote_id}">'
+                '<w:p><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr>'
+                f"<w:r><w:{tag}/></w:r></w:p>"
+                "</w:footnote>"
+            )
+
+        xml = (
+            xml_declaration()
+            + "<w:footnotes"
+            + f' xmlns:w="{NS_W}"'
+            + f' xmlns:r="{NS_R}"'
+            + f' xmlns:wp="{NS_WP}"'
+            + f' xmlns:a="{NS_A}"'
+            + f' xmlns:pic="{NS_PIC}">'
+            + separator("separator", -1, "separator")
+            + separator("continuationSeparator", 0, "continuationSeparator")
+        )
+        for footnote_id, content in self._footnotes.items():
+            xml += f'<w:footnote w:id="{footnote_id}">{content}</w:footnote>'
+        return xml + "</w:footnotes>"
+
     # ─── Blocks ──────────────────────────────────────────────────────────
 
     def _render_blocks(self, blocks: Any, paragraph_style: str | None = None) -> str:
@@ -710,6 +899,8 @@ class DocxWriter:
             if not isinstance(block, dict):
                 continue
             block_type = block.get("type")
+            if self._in_footnote and block_type in Schema.FOOTNOTE_REFUSED_TYPES:
+                continue  # validation refuses these in a footnote; unvalidated, they are nothing
             # OOXML MERGES adjacent tables -- without this pad two tables become
             # one in Word, which is data loss, not styling. Both readers
             # recognise and drop content-free paragraphs.
@@ -1150,6 +1341,15 @@ class DocxWriter:
         for run in _iter_list(runs):
             if not isinstance(run, dict):
                 continue
+            if "footnote" in run:
+                # The mark only: a footnote run carries no text, so no link
+                # either. Unvalidated text typed on the mark is written before
+                # it rather than lost, which is what repair does.
+                if isinstance(run.get("text"), str) and run["text"] != "":
+                    plain = {k: v for k, v in run.items() if k != "footnote"}
+                    xml += self._render_runs([plain])
+                xml += self._render_footnote_run(run)
+                continue
             link = run.get("link")
             run_xml = self._render_run(run)
             if isinstance(link, str) and link != "":
@@ -1227,7 +1427,7 @@ class DocxWriter:
     # ─── Static parts ────────────────────────────────────────────────────
 
     @staticmethod
-    def _build_styles(doc: dict[str, Any] | None = None) -> str:
+    def _build_styles(doc: dict[str, Any] | None = None, footnotes: bool = False) -> str:
         heading_sizes = {1: 36, 2: 32, 3: 28, 4: 26, 5: 24, 6: 22}
         doc = doc or {}
 
@@ -1314,6 +1514,24 @@ class DocxWriter:
             '<w:rPr><w:color w:val="0563C1"/><w:u w:val="single"/></w:rPr>'
             "</w:style>"
         )
+
+        # Only with a footnote, so every other document's styles stay
+        # byte-identical. Word's own names ("footnote text", "footnote
+        # reference").
+        if footnotes:
+            xml += (
+                '<w:style w:type="paragraph" w:styleId="FootnoteText">'
+                '<w:name w:val="footnote text"/><w:basedOn w:val="Normal"/><w:uiPriority w:val="99"/><w:unhideWhenUsed/>'
+                '<w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr>'
+                '<w:rPr><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr>'
+                "</w:style>"
+            )
+            xml += (
+                '<w:style w:type="character" w:styleId="FootnoteReference">'
+                '<w:name w:val="footnote reference"/><w:uiPriority w:val="99"/><w:unhideWhenUsed/>'
+                '<w:rPr><w:vertAlign w:val="superscript"/></w:rPr>'
+                "</w:style>"
+            )
 
         xml += "</w:styles>"
         return xml

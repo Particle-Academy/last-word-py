@@ -60,7 +60,14 @@ genre, lead with what the reader must know or decide, and analyse rather than re
 - Page: `page:{size:"letter", margins:{top:72, bottom:72, left:72, right:72},
   footer:{left:"Q3 2026 Board Memo | Confidential", right:"Page {page} of {pages}"}}`.
   `{page}` and `{pages}` are live page fields. `page.header` works the same way (use it
-  for a classification or audience line on long reports).
+  for a classification or audience line on long reports). `margins` also takes `header`
+  and `footer`: points from the page edge to the header and to the footer (36 by default).
+- Footnotes: a run with `text:""` and a `footnote`, placed right after the words it
+  annotates: `runs:[{text:"Revenue grew 18%"}, {text:"", footnote:{blocks:[{type:"paragraph",
+  runs:[{text:"Audited figures, FY2026; restated for the Q2 disposal."}]}]}}, {text:" on the prior year."}]`.
+  Word numbers the marks and sets each note at the foot of its page; never type the number.
+  Use them for sources, bases and caveats that would clutter the sentence. Not in a header
+  or footer, and never one inside another.
   `defaultFont` (a clean sans such as "Calibri" or the brand body font), `defaultSize` 11.
 - The brief's explicit form wins: if it asks for a "short list", write a list, not a
   table; if it asks for two pages, write two pages.

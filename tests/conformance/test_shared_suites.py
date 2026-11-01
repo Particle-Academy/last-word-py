@@ -57,9 +57,15 @@ import fancy_conformance as loader
 # 15 (+1 documented skip, 0012), nothing failed -- the same counts as at 0.22.1.
 # It had blocked every local release preflight since the sibling checkout moved.
 #
+# Moved 0.34.0 -> 0.40.0 on 2026-11-01 with the footnote and page-geometry port
+# (PHP last-word 0.15.0): last-word/docx-constructs gained rows 0045-0053, which
+# need the new `footnotesPart` extractor, and doc-model/shared 0006 records
+# `footnote` as a last-word-only run property (checked below, last-word half).
+# Re-run against a checkout at the v0.40.0 tag first.
+#
 # CI checks out `ref: v<this>` from .github/workflows/ci.yml. Move the two
 # together; test_ci_checks_out_the_fixture_tag_this_suite_pins fails otherwise.
-PINNED_SUITE_VERSION = "0.34.0"
+PINNED_SUITE_VERSION = "0.40.0"
 
 
 def test_the_pinned_fixture_version_is_the_one_on_disk(capsys: pytest.CaptureFixture[str]) -> None:
@@ -222,3 +228,90 @@ def test_the_loader_enforces_the_repositorys_own_invariants(tmp_path) -> None:
             del os.environ["FANCY_CONFORMANCE_ROOT"]
         else:
             os.environ["FANCY_CONFORMANCE_ROOT"] = previous
+
+
+# doc-model/shared rows this port is KNOWN to fail, with why. Both are PHP
+# last-word 0.12.0's page decoration (owner decision 11: `page.background` and
+# `page.border`), which this port has not been brought up to. A ratchet both
+# ways: a new failure fails, and a row listed here that starts passing fails
+# too, so the list cannot rot into a permanent excuse.
+DOC_MODEL_KNOWN_GAPS: dict[str, str] = {
+    "0002-page": "no page.background / page.border in this port yet (PHP 0.12.0)",
+    "0003-page-border": "no page.border in this port yet (PHP 0.12.0)",
+}
+
+
+def _lw_schema_def(schema: dict, name: str) -> dict:
+    """The last-word schema node for a doc-model definition (PHP `lwxSchemaDef`)."""
+    blocks = {b["properties"]["type"]["const"]: b for b in schema["$defs"]["block"]["oneOf"]}
+    table = blocks["table"]["properties"]
+    nodes = {
+        "document": schema,
+        "page": schema["properties"]["page"],
+        "pageBorder": schema["properties"]["page"]["properties"].get("border", {"properties": {}}),
+        "band": schema["$defs"]["band"],
+        "run": schema["$defs"]["run"],
+        "paragraph": blocks["paragraph"],
+        "heading": blocks["heading"],
+        "table": blocks["table"],
+        "image": blocks["image"],
+        "listItem": schema["$defs"]["listItem"],
+        "tableRow": table["rows"]["items"],
+        "tableCell": table["rows"]["items"]["properties"]["cells"]["items"],
+        "border": schema["$defs"]["border"],
+    }
+    return nodes[name]
+
+
+def _lw_constraint(schema: dict, path: str) -> dict:
+    """The keywords last-word declares at a property (PHP `lwxLastWordConstraint`)."""
+    nodes = {
+        "run.link": schema["$defs"]["run"]["properties"]["link"],
+        "run.size": schema["$defs"]["run"]["properties"]["size"],
+        "defaultSize": schema["properties"]["defaultSize"],
+        "band.size": schema["$defs"]["band"]["properties"]["size"],
+        "image.src": _lw_schema_def(schema, "image")["properties"]["src"],
+        "page.size": schema["properties"]["page"]["properties"]["size"],
+    }
+    keep = ("type", "pattern", "enum", "minimum", "maximum", "exclusiveMinimum")
+    return {k: v for k, v in nodes[path].items() if k in keep}
+
+
+def test_satisfies_the_last_word_half_of_doc_model_shared(capsys: pytest.CaptureFixture[str]) -> None:
+    """The last-word half of `doc-model/shared`, as PHP last-word runs it.
+
+    The suite compares last-word's schema with fine-print's and names fine-print
+    PHP as its runner; each package runs ITS half: `compare` -> last-word's
+    property set is exactly `both` + `lastWordOnly`; `constraint` -> its
+    keywords are exactly `lastWord`. Row 0006 (since 0.40.0) lists `footnote`
+    as a last-word-only run property.
+    """
+    from last_word import json_schema
+
+    schema = json_schema()
+    cases = loader.cases("doc-model/shared")
+    failed: dict[str, str] = {}
+    for case in cases:
+        name = case["input"]["def"]
+        if case["fn"] == "compare":
+            want = sorted([*case["expected"]["both"], *case["expected"]["lastWordOnly"]])
+            if name == "blockTypes":
+                got = sorted(b["properties"]["type"]["const"] for b in schema["$defs"]["block"]["oneOf"])
+            else:
+                got = sorted(_lw_schema_def(schema, name)["properties"])
+        else:
+            want, got = case["expected"]["lastWord"], _lw_constraint(schema, name)
+        if not loader.equals(got, want):
+            failed[case["id"]] = f"expected {want} got {got}"
+
+    with capsys.disabled():
+        print()
+        print(
+            f"doc-model/shared [python, last-word half] - fancy-conformance {loader.version()}: "
+            f"{len(cases) - len(failed)} passed, {len(failed)} failed (known: {sorted(DOC_MODEL_KNOWN_GAPS)}) of {len(cases)}"
+        )
+
+    run_rows = [c for c in cases if c["input"]["def"] == "run"]
+    assert len(run_rows) == 1 and "footnote" in run_rows[0]["expected"]["lastWordOnly"]
+    assert len(cases) >= 20, "doc-model/shared barely loaded"
+    assert sorted(failed) == sorted(DOC_MODEL_KNOWN_GAPS), failed

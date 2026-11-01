@@ -8,6 +8,7 @@ mirrors.
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from ..helpers.chart import SUPPORTED_TYPES as SUPPORTED_CHART_TYPES
@@ -42,6 +43,22 @@ class Schema:
     BORDER_STYLES: tuple[str, ...] = ("single", "double", "dashed", "dotted", "none")
 
     PAGE_SIZES: tuple[str, ...] = ("letter", "legal", "a4")
+
+    #: Block types a footnote's `blocks` refuse, at any depth: a page break means
+    #: nothing at the foot of a page, and a chart's parts are wired to the body.
+    #: A footnote inside a footnote is refused too (Word has no such thing).
+    #: `portable` is listed because PHP lists it; this port has no portable
+    #: node, so here it is an unknown block type either way.
+    FOOTNOTE_REFUSED_TYPES: tuple[str, ...] = ("chart", "pageBreak", "portable")
+
+    #: What a page margin is when the document does not say, in points: one
+    #: inch each side, and half an inch from the page edge to the header and to
+    #: the footer. The reader OMITS a value equal to these (a page read back
+    #: carries only what differs), so a viewer resolves the rest with
+    #: `page_margins()`.
+    PAGE_MARGIN_DEFAULT = 72.0
+
+    PAGE_BAND_DISTANCE_DEFAULT = 36.0
 
     #: Max heading level in the model (Word tolerates 9; we clamp on read/repair).
     MAX_HEADING_LEVEL = 6
@@ -178,6 +195,7 @@ class Schema:
                     "type": "number",
                     "description": "Tracking in points; may be negative.",
                 },
+                "footnote": {"$ref": "#/$defs/footnote"},
             },
         }
 
@@ -408,7 +426,7 @@ class Schema:
                     "properties": {
                         "size": {"enum": list(Schema.PAGE_SIZES)},
                         "orientation": {"enum": ["portrait", "landscape"]},
-                        "margins": {"$ref": "#/$defs/boxSides"},
+                        "margins": {"$ref": "#/$defs/pageMargins"},
                         "header": {"$ref": "#/$defs/band", "description": "A running header on every page."},
                         "footer": {
                             "$ref": "#/$defs/band",
@@ -438,9 +456,95 @@ class Schema:
                 "boxBorders": box_borders,
                 "tableBorders": table_borders,
                 "boxSides": box_sides,
+                "pageMargins": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "description": (
+                        "Page margins in points, 72 (one inch) each side by default, and the header "
+                        "and footer DISTANCES: how far the header sits from the top edge of the page "
+                        "and the footer from the bottom edge, 36 by default. Word moves the body down "
+                        "(or up) when a header (or footer) is taller than the margin leaves room for. "
+                        "Anything omitted is the default."
+                    ),
+                    "properties": {
+                        "top": points,
+                        "right": points,
+                        "bottom": points,
+                        "left": points,
+                        "header": {
+                            "type": "number",
+                            "minimum": 0,
+                            "description": "Points from the top edge of the page to the top of the header. 36 by default.",
+                        },
+                        "footer": {
+                            "type": "number",
+                            "minimum": 0,
+                            "description": "Points from the bottom edge of the page to the bottom of the footer. 36 by default.",
+                        },
+                    },
+                },
+                "footnote": {
+                    "type": "object",
+                    "required": ["blocks"],
+                    "additionalProperties": False,
+                    "description": (
+                        'A footnote, carried by a run whose text is "" and which sits where the '
+                        'reference mark goes: {"text": "", "footnote": {"blocks": [{"type": '
+                        '"paragraph", "runs": [{"text": "Audited figures, FY2026."}]}]}}. Word numbers '
+                        "the marks 1, 2, 3 in document order and sets each footnote at the foot of the "
+                        "page that holds its mark. The blocks are the body vocabulary less chart and "
+                        "pageBreak, with no footnote inside a footnote. Not in a header or footer."
+                    ),
+                    "properties": {
+                        "blocks": {
+                            "type": "array",
+                            "items": {
+                                "allOf": [
+                                    {"$ref": "#/$defs/block"},
+                                    {
+                                        "not": {
+                                            "properties": {"type": {"enum": ["chart", "pageBreak"]}},
+                                            "required": ["type"],
+                                        }
+                                    },
+                                ]
+                            },
+                        },
+                    },
+                },
                 "band": band,
                 "block": {"oneOf": list(blocks.values())},
             },
+        }
+
+    @staticmethod
+    def page_margins(doc: Any) -> dict[str, float]:
+        """Every page margin and both header/footer distances, in points, defaults filled in.
+
+        What a paged viewer lays a page out from. `read()` omits a value equal
+        to its default (`PAGE_MARGIN_DEFAULT`, `PAGE_BAND_DISTANCE_DEFAULT`),
+        and omits `page` altogether when nothing differs, so this is the one
+        place the defaults are applied. Mirrors PHP `Schema::pageMargins()`: a
+        value that is not a finite number (a string, a boolean, NaN) is the
+        default, and every value comes back a float.
+        """
+        page = doc.get("page") if isinstance(doc, dict) else None
+        margins = page.get("margins") if isinstance(page, dict) else None
+        m = margins if isinstance(margins, dict) else {}
+
+        def value(key: str, default: float) -> float:
+            v = m.get(key)
+            if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(float(v)):
+                return float(v)
+            return default
+
+        return {
+            "top": value("top", Schema.PAGE_MARGIN_DEFAULT),
+            "right": value("right", Schema.PAGE_MARGIN_DEFAULT),
+            "bottom": value("bottom", Schema.PAGE_MARGIN_DEFAULT),
+            "left": value("left", Schema.PAGE_MARGIN_DEFAULT),
+            "header": value("header", Schema.PAGE_BAND_DISTANCE_DEFAULT),
+            "footer": value("footer", Schema.PAGE_BAND_DISTANCE_DEFAULT),
         }
 
 

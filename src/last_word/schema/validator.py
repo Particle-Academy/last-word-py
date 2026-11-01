@@ -17,6 +17,7 @@ change together.
 
 from __future__ import annotations
 
+import math
 import re
 from typing import Any
 
@@ -268,11 +269,25 @@ def _check_paragraph_props(block: dict, path: str, errors: list[dict[str, str]])
     _check_borders(block.get("borders"), f"{path}.borders", "borders", BOX_EDGES, errors)
 
 
+#: How deep `_refuse_in_footnote` follows quotes and cells. PHP borrows
+#: `Portable::MAX_DEPTH` (64) for this walk; this port has no Portable, so the
+#: number is carried here.
+_FOOTNOTE_REFUSE_MAX_DEPTH = 64
+
+
 class Validator:
     """Mirrors `LastWord\\Schema\\Validator`."""
 
+    def __init__(self) -> None:
+        # Where the blocks being validated live: the body, or a footnote. A
+        # footnote run is refused inside a footnote -- Word has none. (PHP has
+        # a third context, a `{blocks}` header or footer; this port's bands are
+        # one-line slots that hold no runs, so there is no run there to refuse.)
+        self._context = "body"
+
     def validate(self, doc: Any) -> list[dict[str, str]]:
         errors: list[dict[str, str]] = []
+        self._context = "body"
 
         if not isinstance(doc, dict):
             # PHP's signature takes an array, so this case cannot arise there.
@@ -302,6 +317,19 @@ class Validator:
                     errors,
                 )
                 _check_sides(page.get("margins"), "page.margins", "page margins", errors)
+                margins = page.get("margins")
+                for distance in ("header", "footer"):
+                    value = margins.get(distance) if isinstance(margins, dict) else None
+                    if value is not None and (
+                        not _is_number(value) or not math.isfinite(float(value)) or value < 0
+                    ):
+                        errors.append(
+                            _error(
+                                f"page.margins.{distance}",
+                                f"page margins {distance} is the distance from the page edge to the "
+                                f"{distance}: a number of points, 0 or more (36 by default)",
+                            )
+                        )
                 for kind in ("header", "footer"):
                     band = page.get(kind)
                     if band is None:
@@ -566,7 +594,16 @@ class Validator:
                 )
                 continue
             if not isinstance(run.get("text"), str):
-                errors.append(_error(f"{run_path}.text", 'run requires a string "text"'))
+                errors.append(
+                    _error(
+                        f"{run_path}.text",
+                        'a footnote run requires "text": "" (Word numbers the mark)'
+                        if "footnote" in run
+                        else 'run requires a string "text"',
+                    )
+                )
+            if "footnote" in run:
+                self._validate_footnote(run, run_path, errors)
             for flag in Schema.RUN_FLAGS:
                 value = run.get(flag)
                 if value is not None and not isinstance(value, bool):
@@ -592,6 +629,82 @@ class Validator:
                             f"run {color_key} must be a #RRGGBB hex string",
                         )
                     )
+
+
+    def _validate_footnote(self, run: dict, run_path: str, errors: list[dict[str, str]]) -> None:
+        """A footnote run: `{"text": "", "footnote": {"blocks": [...]}}`.
+
+        In the body only; its blocks are the body's rules less
+        `Schema.FOOTNOTE_REFUSED_TYPES` at any depth.
+        """
+        at = f"{run_path}.footnote"
+        if self._context == "footnote":
+            errors.append(_error(at, "a footnote cannot hold a footnote"))
+            return
+        if isinstance(run.get("text"), str) and run["text"] != "":
+            errors.append(
+                _error(
+                    f"{run_path}.text",
+                    'a footnote run\'s text must be "": Word numbers the mark. '
+                    "Put the text it follows in the run before it",
+                )
+            )
+        note = run["footnote"]
+        # PHP: `!is_array($note) || ($note !== [] && array_is_list($note))`.
+        # An empty JSON array is an (empty) PHP array, so it reaches the
+        # "blocks" check below rather than this one.
+        if not isinstance(note, (dict, list)) or (isinstance(note, list) and note != []):
+            errors.append(
+                _error(
+                    at,
+                    'footnote must be an object: {"blocks": [{"type": "paragraph", "runs": [{"text": "..."}]}]}',
+                )
+            )
+            return
+        blocks = note.get("blocks") if isinstance(note, dict) else None
+        if not isinstance(blocks, list) or blocks == []:  # is_list(), spelled so mypy narrows
+            errors.append(
+                _error(
+                    f"{at}.blocks",
+                    'footnote requires "blocks": a non-empty list of blocks, e.g. '
+                    '[{"type": "paragraph", "runs": [{"text": "Source: ..."}]}]',
+                )
+            )
+            return
+
+        outer, self._context = self._context, "footnote"
+        try:
+            for i, block in enumerate(blocks):
+                if isinstance(block, dict) and block.get("type") in Schema.FOOTNOTE_REFUSED_TYPES:
+                    continue  # refused below
+                self._validate_block(block, f"{at}.blocks[{i}]", errors)
+        finally:
+            self._context = outer
+        self._refuse_in_footnote(blocks, f"{at}.blocks", errors)
+
+    def _refuse_in_footnote(
+        self, blocks: list, path: str, errors: list[dict[str, str]], depth: int = 0
+    ) -> None:
+        if depth > _FOOTNOTE_REFUSE_MAX_DEPTH:
+            return
+        for i, block in enumerate(blocks):
+            if not isinstance(block, dict):
+                continue
+            at = f"{path}[{i}]"
+            block_type = block.get("type")
+            if block_type in Schema.FOOTNOTE_REFUSED_TYPES:
+                errors.append(_error(f"{at}.type", f"a footnote cannot hold a {block_type} block"))
+                continue
+            if block_type == "quote" and isinstance(block.get("blocks"), list):
+                self._refuse_in_footnote(block["blocks"], f"{at}.blocks", errors, depth + 1)
+            if block_type == "table" and isinstance(block.get("rows"), list):
+                for r, row in enumerate(block["rows"]):
+                    cells = row.get("cells") if isinstance(row, dict) else None
+                    for c, cell in enumerate(cells if isinstance(cells, list) else []):
+                        if isinstance(cell, dict) and isinstance(cell.get("blocks"), list):
+                            self._refuse_in_footnote(
+                                cell["blocks"], f"{at}.rows[{r}].cells[{c}].blocks", errors, depth + 1
+                            )
 
 
 def _level_text(level: Any) -> str:

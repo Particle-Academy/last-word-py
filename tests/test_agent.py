@@ -29,6 +29,8 @@ def test_exports_a_json_schema_for_llm_tool_registration() -> None:
         "boxBorders",
         "tableBorders",
         "boxSides",
+        "pageMargins",
+        "footnote",
         "band",
         "block",
     }

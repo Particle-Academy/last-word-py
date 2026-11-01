@@ -30,6 +30,13 @@ class Run(TypedDict, total=False):
     link: str
     color: str
     highlight: str
+    footnote: Footnote
+
+
+class Footnote(TypedDict):
+    """A footnote's content, carried by a run whose `text` is "": Word numbers the mark."""
+
+    blocks: list[Block]
 
 
 class ListItem(TypedDict, total=False):
