@@ -63,9 +63,15 @@ import fancy_conformance as loader
 # `footnote` as a last-word-only run property (checked below, last-word half).
 # Re-run against a checkout at the v0.40.0 tag first.
 #
+# Moved 0.40.0 -> 0.41.0 on 2026-11-01 with the first/even band, field token and
+# meta port (PHP last-word 0.16.0): last-word/docx-constructs gained rows
+# 0054-0079 and the bandParts / bandFields / coreProps extractors, and
+# doc-model/shared 0001 / 0002 record `meta` and the four band variants as
+# last-word-only. Re-run against a checkout at the v0.41.0 tag first.
+#
 # CI checks out `ref: v<this>` from .github/workflows/ci.yml. Move the two
 # together; test_ci_checks_out_the_fixture_tag_this_suite_pins fails otherwise.
-PINNED_SUITE_VERSION = "0.40.0"
+PINNED_SUITE_VERSION = "0.41.0"
 
 
 def test_the_pinned_fixture_version_is_the_one_on_disk(capsys: pytest.CaptureFixture[str]) -> None:
@@ -236,6 +242,8 @@ def test_the_loader_enforces_the_repositorys_own_invariants(tmp_path) -> None:
 # ways: a new failure fails, and a row listed here that starts passing fails
 # too, so the list cannot rot into a permanent excuse.
 DOC_MODEL_KNOWN_GAPS: dict[str, str] = {
+    # Since 0.41.0 this row also lists the four band variants, which this port
+    # has; it still fails on background / border alone.
     "0002-page": "no page.background / page.border in this port yet (PHP 0.12.0)",
     "0003-page-border": "no page.border in this port yet (PHP 0.12.0)",
 }
@@ -310,6 +318,16 @@ def test_satisfies_the_last_word_half_of_doc_model_shared(capsys: pytest.Capture
             f"doc-model/shared [python, last-word half] - fancy-conformance {loader.version()}: "
             f"{len(cases) - len(failed)} passed, {len(failed)} failed (known: {sorted(DOC_MODEL_KNOWN_GAPS)}) of {len(cases)}"
         )
+
+    # 0.41.0: meta and the band variants are recorded as last-word-only, and
+    # this port has every one of them, so the last-word half of 0002 differs
+    # from this schema by background / border and nothing else.
+    by_id = {c["id"]: c for c in cases}
+    assert "meta" in by_id["0001-document"]["expected"]["lastWordOnly"]
+    page_props = set(schema["properties"]["page"]["properties"])
+    page_want = {*by_id["0002-page"]["expected"]["both"], *by_id["0002-page"]["expected"]["lastWordOnly"]}
+    assert page_want - page_props == {"background", "border"}, page_want - page_props
+    assert page_props <= page_want
 
     run_rows = [c for c in cases if c["input"]["def"] == "run"]
     assert len(run_rows) == 1 and "footnote" in run_rows[0]["expected"]["lastWordOnly"]

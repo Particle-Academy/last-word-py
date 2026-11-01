@@ -10,15 +10,17 @@ viable set, in a FIXED entry order:
 
     [Content_Types].xml
     _rels/.rels
-    docProps/core.xml               (dc:title -- only when the doc has a title)
+    docProps/core.xml               (dc:title, dc:creator -- only with a title or meta.author)
     word/document.xml
     word/styles.xml                 (Normal, Title, Heading1-6, Quote, CodeBlock,
                                      ListParagraph + InlineCode / Hyperlink char styles)
     word/numbering.xml              (bullet + decimal abstract numbering, 6 indent
                                      levels; one fresh instance per ordered list so
                                      numbering restarts)
-    word/settings.xml               (only with a footnote: w:footnotePr)
-    word/header1.xml, footer1.xml   (only with a running header / footer)
+    word/settings.xml               (only with even/odd bands or a footnote)
+    word/header{1,2,3}.xml, footer{1,2,3}.xml
+                                    (only with a running header / footer; numbered
+                                     by slot: 1 default, 2 first page, 3 even pages)
     word/footnotes.xml              (only with a footnote; + its own _rels)
     word/_rels/document.xml.rels    (styles, numbering, hyperlinks, images)
     word/media/imageN.png|jpeg      (decoded data-URL images)
@@ -63,7 +65,7 @@ from typing import Any
 
 from ..helpers import chart as chart_model
 from ..helpers import image_size
-from ..helpers.php import is_numeric, php_float, php_int_round, php_str, php_truthy
+from ..helpers.php import is_numeric, php_float, php_int_round, php_str, php_trim, php_truthy
 from ..schema.schema import Schema
 from . import chart_part
 from ..helpers.xml import attr as xml_attr
@@ -161,7 +163,16 @@ def _hex(value: Any) -> str | None:
     return match.group(1).upper() if match is not None else None
 
 
-_BAND_TOKEN_RE = re.compile(r"(\{page\}|\{pages\})")
+#: The slot a band part is numbered by: `{kind}1` default, `{kind}2` first,
+#: `{kind}3` even (PHP `DocxWriter::SLOT_NUMBERS`).
+_SLOT_NUMBERS = {"default": 1, "first": 2, "even": 3}
+
+
+def _blank_band_xml(kind: str) -> str:
+    """An empty header or footer part: a first or even page with no band, when
+    the document's own band would otherwise show there. PHP `blankBandXml()`."""
+    tag = "w:hdr" if kind == "header" else "w:ftr"
+    return xml_declaration() + f'<{tag} xmlns:w="{NS_W}"><w:p/></{tag}>'
 
 
 def _band(spec: Any) -> dict[str, Any] | None:
@@ -175,24 +186,6 @@ def _band(spec: Any) -> dict[str, Any] | None:
     slots["size"] = php_float(size) if is_numeric(size) and php_float(size) > 0 else 9.0
     slots["color"] = _hex(spec.get("color")) or "6B7280"
     return slots
-
-
-def _band_runs(text: str, r_pr: str) -> str:
-    """Text with ``{page}`` / ``{pages}`` as live PAGE / NUMPAGES complex fields (see PHP)."""
-    out = ""
-    for piece in (p for p in _BAND_TOKEN_RE.split(text) if p != ""):
-        instr = {"{page}": "PAGE", "{pages}": "NUMPAGES"}.get(piece)
-        if instr is None:
-            out += f'<w:r>{r_pr}<w:t xml:space="preserve">{xml_text(piece)}</w:t></w:r>'
-        else:
-            out += (
-                f'<w:r>{r_pr}<w:fldChar w:fldCharType="begin"/></w:r>'
-                f'<w:r>{r_pr}<w:instrText xml:space="preserve"> {instr} </w:instrText></w:r>'
-                f'<w:r>{r_pr}<w:fldChar w:fldCharType="separate"/></w:r>'
-                f"<w:r>{r_pr}<w:t>1</w:t></w:r>"
-                f'<w:r>{r_pr}<w:fldChar w:fldCharType="end"/></w:r>'
-            )
-    return out
 
 
 def _shading_xml(value: Any) -> str:
@@ -449,8 +442,21 @@ class DocxWriter:
         # Twips between the page margins; set from `page` before any block
         # renders. Table grids are laid out against it.
         self._content_width = 9360
-        # The running header / footer parts asked for: kind -> part XML.
+        # The document's own running headers and footers, as finished parts:
+        # part name -> part XML, the name `{kind}{n}` numbered by SLOT -- 1 the
+        # default (`page.header`), 2 the first page (`page.firstHeader`), 3 even
+        # pages (`page.evenHeader`) -- written as `word/{name}.xml` with
+        # relationship id `rId{Kind}{n}`. Empty when none were asked for.
         self._bands: dict[str, str] = {}
+        # `w:titlePg` / `w:evenAndOddHeaders`: the document has a first (even)
+        # band of its own. (PHP also turns them on for a carried template part;
+        # this port writes no template parts.)
+        self._title_pg = False
+        self._even_and_odd = False
+        # The cached results an AUTHOR / TITLE field gets: `meta.author` and
+        # the document `title`, or "".
+        self._field_author = ""
+        self._field_title = ""
         # The document's footnotes, id -> `w:footnote` content (without the
         # wrapper), numbered 1, 2, 3 in document order as their runs render.
         # The separator (-1) and continuation separator (0) Word requires are
@@ -464,9 +470,8 @@ class DocxWriter:
         # True while a footnote's blocks render: a footnote run inside one
         # renders as nothing.
         self._in_footnote = False
-        # Whether this document needs word/settings.xml. In PHP a page colour
-        # or even/odd headers need it too; this port has neither, so only a
-        # footnote does.
+        # Whether this document needs word/settings.xml: even/odd headers or a
+        # footnote. In PHP a page colour needs it too; this port has none.
         self._has_settings = False
 
     # ─── Public ──────────────────────────────────────────────────────────
@@ -500,6 +505,15 @@ class DocxWriter:
         self._in_footnote = False
 
         has_title = "title" in doc
+        # meta.author (PHP 0.16.0) is dc:creator, beside the title in the core
+        # part; a document with neither writes no core part, as before.
+        meta = doc.get("meta")
+        author = meta.get("author") if isinstance(meta, dict) else None
+        if not isinstance(author, str) or author == "":
+            author = None
+        has_core = has_title or author is not None
+        self._field_author = author or ""
+        self._field_title = doc["title"] if isinstance(doc.get("title"), str) else ""
 
         # document.xml first -- it registers hyperlink/image rels and media
         # files, and counts the ordered-list numbering instances numbering.xml
@@ -507,14 +521,14 @@ class DocxWriter:
         document_xml = self._build_document_xml(doc)
 
         parts: list[tuple[str, bytes]] = [
-            ("[Content_Types].xml", self._build_content_types(has_title).encode("utf-8")),
-            ("_rels/.rels", self._build_top_rels(has_title).encode("utf-8")),
+            ("[Content_Types].xml", self._build_content_types(has_core).encode("utf-8")),
+            ("_rels/.rels", self._build_top_rels(has_core).encode("utf-8")),
         ]
-        if has_title:
+        if has_core:
             parts.append(
                 (
                     "docProps/core.xml",
-                    self._build_core_xml(php_str(doc.get("title"))).encode("utf-8"),
+                    self._build_core_xml(php_str(doc.get("title")) if has_title else None, author).encode("utf-8"),
                 )
             )
         parts.append(("word/document.xml", document_xml.encode("utf-8")))
@@ -522,8 +536,8 @@ class DocxWriter:
         parts.append(("word/numbering.xml", self._build_numbering().encode("utf-8")))
         if self._has_settings:
             parts.append(("word/settings.xml", self._build_settings().encode("utf-8")))
-        for kind, band_xml in self._bands.items():
-            parts.append((f"word/{kind}1.xml", band_xml.encode("utf-8")))
+        for name, band_xml in self._bands.items():
+            parts.append((f"word/{name}.xml", band_xml.encode("utf-8")))
         if self._footnotes:
             parts.append(("word/footnotes.xml", self._build_footnotes().encode("utf-8")))
             if self._footnote_rels:
@@ -549,7 +563,7 @@ class DocxWriter:
 
     # ─── Parts ───────────────────────────────────────────────────────────
 
-    def _build_content_types(self, has_title: bool) -> str:
+    def _build_content_types(self, has_core: bool) -> str:
         # RULING PENDING: documents.md §1.2 rules for the Node behaviour here --
         # declare only the extensions the document actually contains. The
         # shipped PHP engine declares png and jpeg unconditionally and this port
@@ -585,9 +599,10 @@ class DocxWriter:
                 '<Override PartName="/word/settings.xml" ContentType="application/vnd.'
                 'openxmlformats-officedocument.wordprocessingml.settings+xml"/>'
             )
-        for kind in self._bands:
+        for name in self._bands:
+            kind = "header" if name.startswith("header") else "footer"
             xml += (
-                f'<Override PartName="/word/{kind}1.xml" ContentType="application/vnd.'
+                f'<Override PartName="/word/{name}.xml" ContentType="application/vnd.'
                 f'openxmlformats-officedocument.wordprocessingml.{kind}+xml"/>'
             )
         if self._footnotes:
@@ -600,7 +615,7 @@ class DocxWriter:
                 f'<Override PartName="/word/charts/chart{n}.xml" ContentType="application/vnd.'
                 'openxmlformats-officedocument.drawingml.chart+xml"/>'
             )
-        if has_title:
+        if has_core:
             xml += (
                 '<Override PartName="/docProps/core.xml" ContentType="application/vnd.'
                 'openxmlformats-package.core-properties+xml"/>'
@@ -608,7 +623,7 @@ class DocxWriter:
         xml += "</Types>"
         return xml
 
-    def _build_top_rels(self, has_title: bool) -> str:
+    def _build_top_rels(self, has_core: bool) -> str:
         xml = xml_declaration()
         xml += (
             '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/'
@@ -618,7 +633,7 @@ class DocxWriter:
             '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/'
             'officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
         )
-        if has_title:
+        if has_core:
             xml += (
                 '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/'
                 'package/2006/relationships/metadata/core-properties" '
@@ -627,11 +642,13 @@ class DocxWriter:
         xml += "</Relationships>"
         return xml
 
-    def _build_core_xml(self, title: str) -> str:
-        """docProps/core.xml carrying dc:title -- the cross-language title slot.
+    def _build_core_xml(self, title: str | None, author: str | None) -> str:
+        """docProps/core.xml carrying dc:title -- the cross-language title slot --
+        and, from 0.9.0 (PHP 0.16.0), dc:creator for `meta.author`, title first.
 
-        Byte-identical to both mirrors' output. Deterministic: no dcterms
-        created/modified timestamps.
+        Each only when there is one, so a title-only part is byte-for-byte what
+        it always was. Byte-identical to both mirrors' output. Deterministic: no
+        dcterms created/modified timestamps.
         """
         return (
             xml_declaration()
@@ -640,9 +657,8 @@ class DocxWriter:
             + 'xmlns:dc="http://purl.org/dc/elements/1.1/" '
             'xmlns:dcterms="http://purl.org/dc/terms/" '
             + 'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
-            + "<dc:title>"
-            + xml_text(title)
-            + "</dc:title>"
+            + ("<dc:title>" + xml_text(title) + "</dc:title>" if title is not None else "")
+            + ("<dc:creator>" + xml_text(author) + "</dc:creator>" if author is not None else "")
             + "</cp:coreProperties>"
         )
 
@@ -670,10 +686,11 @@ class DocxWriter:
                 '<Relationship Id="rIdFootnotes" Type="http://schemas.openxmlformats.org/'
                 'officeDocument/2006/relationships/footnotes" Target="footnotes.xml"/>'
             )
-        for kind in self._bands:
+        for name in self._bands:
+            kind = "header" if name.startswith("header") else "footer"
             xml += (
-                f'<Relationship Id="rId{kind.capitalize()}1" Type="http://schemas.openxmlformats.org/'
-                f'officeDocument/2006/relationships/{kind}" Target="{kind}1.xml"/>'
+                f'<Relationship Id="rId{name.capitalize()}" Type="http://schemas.openxmlformats.org/'
+                f'officeDocument/2006/relationships/{kind}" Target="{name}.xml"/>'
             )
         xml += self._relationships(self._rels)
         xml += "</Relationships>"
@@ -729,17 +746,54 @@ class DocxWriter:
         body = self._render_blocks(doc.get("blocks") or [])
 
         # Header/footer references come FIRST in w:sectPr (before w:pgSz).
+        #
+        # The document's own slots, kind -> reference type -> rId: `header`
+        # (default), `firstHeader` (first), `evenHeader` (even), and the same for
+        # footers, rendered in that order. An empty first or even band blanks
+        # that page when the document's own default band of that kind exists,
+        # and is nothing otherwise. Mirrors PHP 0.16.0 `buildDocumentXml()`,
+        # less the template precedence (this port writes no template parts).
         self._bands = {}
-        references = ""
         page_spec = doc.get("page") if isinstance(doc.get("page"), (dict, list)) else {}
+        own: dict[str, dict[str, str]] = {}
         for kind in ("header", "footer"):
-            spec = _band(page_spec.get(kind) if isinstance(page_spec, dict) else None)
-            if spec is not None:
-                self._bands[kind] = self._band_xml(kind, spec)
-                references += f'<w:{kind}Reference w:type="default" r:id="rId{kind.capitalize()}1"/>'
+            for slot_type, n in _SLOT_NUMBERS.items():
+                key = kind if slot_type == "default" else slot_type + kind.capitalize()
+                spec = page_spec.get(key) if isinstance(page_spec, dict) else None
+                name = f"{kind}{n}"
+                band = _band(spec)
+                xml = self._band_xml(kind, band) if band is not None else None
+                if (
+                    xml is None
+                    and slot_type != "default"
+                    and isinstance(spec, (dict, list))
+                    and "default" in own.get(kind, {})
+                ):
+                    xml = _blank_band_xml(kind)
+                if xml is not None:
+                    self._bands[name] = xml
+                    own.setdefault(kind, {})[slot_type] = f"rId{name.capitalize()}"
+
+        own_types = {t for slots in own.values() for t in slots}
+        self._title_pg = "first" in own_types
+        self._even_and_odd = "even" in own_types
+
+        # With a switch on, a kind with no part for those pages shows its
+        # default there: the document's own band is on every page unless it
+        # says otherwise.
+        references = ""
+        for kind in ("header", "footer"):
+            slots = dict(own.get(kind, {}))
+            if self._title_pg and "first" not in slots and "default" in slots:
+                slots["first"] = slots["default"]
+            if self._even_and_odd and "even" not in slots and "default" in slots:
+                slots["even"] = slots["default"]
+            for slot_type in _SLOT_NUMBERS:
+                if slot_type in slots:
+                    references += f'<w:{kind}Reference w:type="{slot_type}" r:id="{slots[slot_type]}"/>'
 
         # Footnotes are registered as the body renders, above, so they are known here.
-        self._has_settings = bool(self._footnotes)
+        self._has_settings = self._even_and_odd or bool(self._footnotes)
 
         orient = ' w:orient="landscape"' if page["orientation"] == "landscape" else ""
         body += (
@@ -749,7 +803,10 @@ class DocxWriter:
             f'<w:pgMar w:top="{page["top"]}" w:right="{page["right"]}" '
             f'w:bottom="{page["bottom"]}" w:left="{page["left"]}" '
             f'w:header="{page["header"]}" w:footer="{page["footer"]}" w:gutter="0"/>'
-            "</w:sectPr>"
+            # CT_SectPr is a sequence: titlePg comes after pgMar (and PHP's
+            # pgBorders, which this port does not write).
+            + ("<w:titlePg/>" if self._title_pg else "")
+            + "</w:sectPr>"
         )
 
         return (
@@ -777,25 +834,79 @@ class DocxWriter:
             + f'<w:tab w:val="center" w:pos="{self._content_width // 2}"/>'
             + f'<w:tab w:val="right" w:pos="{self._content_width}"/>'
             + '</w:tabs><w:spacing w:before="0" w:after="0"/></w:pPr>'
-            + _band_runs(band["left"], r_pr)
+            + self._band_runs(band["left"], r_pr)
             + f"<w:r>{r_pr}<w:tab/></w:r>"
-            + _band_runs(band["center"], r_pr)
+            + self._band_runs(band["center"], r_pr)
             + f"<w:r>{r_pr}<w:tab/></w:r>"
-            + _band_runs(band["right"], r_pr)
+            + self._band_runs(band["right"], r_pr)
             + "</w:p>"
             + f"</{tag}>"
         )
 
-    def _build_settings(self) -> str:
-        """The settings part, written only when something needs it (footnotes).
+    def _band_runs(self, text: str, r_pr: str) -> str:
+        """Text with its field tokens (`Schema.FIELD_TOKEN`) as live fields:
+        `{page}` PAGE, `{pages}` NUMPAGES, `{date:yyyy-MM-dd}` DATE with its
+        picture, and the rest. Anything else is literal text. PHP `bandRuns()`.
 
-        CT_Settings is a sequence; PHP writes displayBackgroundShape and
-        evenAndOddHeaders before footnotePr, and this port has neither. The
+        COMPLEX fields, every piece a run carrying the band's formatting (a
+        `w:fldSimple` rendered its number in the paragraph's default size and
+        colour in LibreOffice).
+        """
+        out = ""
+        for piece in Schema.split_field_tokens(text):
+            if isinstance(piece, dict):
+                out += self._field_runs(piece, "<w:r>" + r_pr)
+            else:
+                out += f'<w:r>{r_pr}<w:t xml:space="preserve">{xml_text(piece)}</w:t></w:r>'
+        return out
+
+    def _field_runs(self, field: dict[str, str], open_run: str) -> str:
+        """One field token as a complex field, every piece opened with
+        `open_run`: begin, the instruction between single spaces, separate, the
+        cached result, end. PHP `fieldRuns()`.
+
+        The cached result is the value when the writer knows it and nothing when
+        it does not -- never a guess, and never the clock, which would make the
+        same document write different bytes: `1` for PAGE, NUMPAGES, SECTION and
+        SECTIONPAGES; the author and the title for AUTHOR and TITLE (empty
+        without one); no result run at all for DATE, TIME and FILENAME.
+        """
+        name = field["name"]
+        if name in ("page", "pages", "section", "sectionpages"):
+            result = "1"
+        elif name == "author":
+            result = self._field_author
+        elif name == "title":
+            result = self._field_title
+        else:
+            result = ""
+        preserve = ' xml:space="preserve"' if result != php_trim(result) else ""
+        return (
+            open_run
+            + '<w:fldChar w:fldCharType="begin"/></w:r>'
+            + open_run
+            + '<w:instrText xml:space="preserve"> '
+            + xml_text(field["instruction"])
+            + " </w:instrText></w:r>"
+            + open_run
+            + '<w:fldChar w:fldCharType="separate"/></w:r>'
+            + (open_run + "<w:t" + preserve + ">" + xml_text(result) + "</w:t></w:r>" if result != "" else "")
+            + open_run
+            + '<w:fldChar w:fldCharType="end"/></w:r>'
+        )
+
+    def _build_settings(self) -> str:
+        """The settings part, written only when something needs it (even/odd
+        headers, footnotes).
+
+        CT_Settings is a sequence; PHP writes displayBackgroundShape (which this
+        port does not have), then evenAndOddHeaders, then footnotePr. The
         footnotePr names the two separator footnotes, as Word itself writes it.
         """
         return (
             xml_declaration()
             + f'<w:settings xmlns:w="{NS_W}">'
+            + ("<w:evenAndOddHeaders/>" if self._even_and_odd else "")
             + (
                 '<w:footnotePr><w:footnote w:id="-1"/><w:footnote w:id="0"/></w:footnotePr>'
                 if self._footnotes

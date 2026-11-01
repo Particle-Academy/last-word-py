@@ -9,9 +9,14 @@ mirrors.
 from __future__ import annotations
 
 import math
-from typing import Any
+import re
+from typing import Any, ClassVar
 
 from ..helpers.chart import SUPPORTED_TYPES as SUPPORTED_CHART_TYPES
+
+# PHP `/^\s*([A-Za-z]+)(.*)$/s` and `/\\@\s*(?:"([^"]*)"|(\S+))/`, no `/u`.
+_FIELD_WORD = re.compile(r"^\s*([A-Za-z]+)(.*)$", re.DOTALL | re.ASCII)
+_FIELD_PICTURE = re.compile(r'\\@\s*(?:"([^"]*)"|(\S+))', re.ASCII)
 
 
 class Schema:
@@ -59,6 +64,111 @@ class Schema:
     PAGE_MARGIN_DEFAULT = 72.0
 
     PAGE_BAND_DISTANCE_DEFAULT = 36.0
+
+    #: The page's running bands, in the order the schema lists them and read()
+    #: returns them (PHP 0.16.0). `header` / `footer` are every page; with a
+    #: `firstHeader` they are every page but the first, and with an
+    #: `evenHeader` the odd pages. Each variant is the same shape as `header`
+    #: in this port: a one-line band, or the empty `{"blocks": []}`.
+    PAGE_BANDS: tuple[str, ...] = (
+        "header",
+        "footer",
+        "firstHeader",
+        "firstFooter",
+        "evenHeader",
+        "evenFooter",
+    )
+
+    #: A band key => (kind, Word reference type).
+    PAGE_BAND_SLOTS: ClassVar[dict[str, tuple[str, str]]] = {
+        "header": ("header", "default"),
+        "footer": ("footer", "default"),
+        "firstHeader": ("header", "first"),
+        "firstFooter": ("footer", "first"),
+        "evenHeader": ("header", "even"),
+        "evenFooter": ("footer", "even"),
+    }
+
+    #: The field tokens live in header and footer text, as one regex:
+    #: `{page}` `{pages}` `{section}` `{sectionpages}` `{author}` `{title}`
+    #: `{filename}`, and `{date}` / `{time}` with an optional `:FORMAT` -- a
+    #: Word date-time picture, one or more characters, none of `{`, `}`, `"` or
+    #: a backslash. Names are lower-case and exact; anything else in braces is
+    #: literal text. Group 1 is a plain name; group 2 a dated name and group 3
+    #: its format. PHP `Schema::FIELD_TOKEN`; every excluded character is ASCII,
+    #: so matching by codepoint here and by byte there agrees.
+    FIELD_TOKEN = re.compile(
+        r'\{(?:(page|pages|section|sectionpages|author|title|filename)|(date|time)(?::([^{}"\\]+))?)\}'
+    )
+
+    #: Field token name => Word field instruction.
+    FIELD_INSTRUCTIONS: ClassVar[dict[str, str]] = {
+        "page": "PAGE",
+        "pages": "NUMPAGES",
+        "section": "SECTION",
+        "sectionpages": "SECTIONPAGES",
+        "author": "AUTHOR",
+        "title": "TITLE",
+        "filename": "FILENAME",
+        "date": "DATE",
+        "time": "TIME",
+    }
+
+    @staticmethod
+    def split_field_tokens(text: str) -> list[str | dict[str, str]]:
+        """Header/footer text split into literal text and field tokens, in order.
+
+        A string is literal; a dict is a field, `{token, name, instruction}`,
+        where `instruction` is the Word field instruction without its
+        surrounding spaces (`PAGE`, `DATE \\@ "yyyy-MM-dd"`). Empty pieces are
+        dropped. PHP `Schema::splitFieldTokens()`.
+        """
+        out: list[str | dict[str, str]] = []
+        at = 0
+        for m in Schema.FIELD_TOKEN.finditer(text):
+            if m.start() > at:
+                out.append(text[at : m.start()])
+            plain = m.group(1) or ""
+            name = plain if plain != "" else m.group(2)
+            fmt = (m.group(3) or "") if plain == "" else ""
+            out.append(
+                {
+                    "token": m.group(0),
+                    "name": name,
+                    "instruction": Schema.FIELD_INSTRUCTIONS[name] + (f' \\@ "{fmt}"' if fmt != "" else ""),
+                }
+            )
+            at = m.end()
+        if at < len(text):
+            out.append(text[at:])
+        return out
+
+    @staticmethod
+    def field_token_of(instruction: str) -> str | None:
+        """A Word field instruction back as its token, or None when it is not one.
+
+        The first word names the field (any case); `\\@ "FORMAT"` (or an unquoted
+        `\\@ FORMAT`) is DATE's and TIME's picture; every other switch or argument
+        is dropped. A picture the grammar cannot hold reads as the bare
+        `{date}` / `{time}`. PHP `Schema::fieldTokenOf()` -- its regexes have no
+        `/u`, hence `re.ASCII` (a non-breaking space is not whitespace there).
+        """
+        m = _FIELD_WORD.match(instruction)
+        if m is None:
+            return None
+        word = m.group(1).upper()
+        name = next((k for k, v in Schema.FIELD_INSTRUCTIONS.items() if v == word), None)
+        if name is None:
+            return None
+        if name in ("date", "time"):
+            p = _FIELD_PICTURE.search(m.group(2))
+            if p is not None:
+                fmt = p.group(1) if (p.group(1) or "") != "" else (p.group(2) or "")
+                token = "{" + name + ":" + fmt + "}"
+                check = Schema.FIELD_TOKEN.search(token)
+                if fmt != "" and check is not None and check.group(0) == token:
+                    return token
+        return "{" + name + "}"
 
     #: Max heading level in the model (Word tolerates 9; we clamp on read/repair).
     MAX_HEADING_LEVEL = 6
@@ -116,8 +226,11 @@ class Schema:
         band_slot: dict[str, Any] = {
             "type": "string",
             "description": (
-                "Text. `{page}` is the current page number and `{pages}` the page count, "
-                'both live fields: "Page {page} of {pages}".'
+                'Text with live Word fields: {page} and {pages} ("Page {page} of {pages}"), '
+                "{section}, {sectionpages}, {author} (meta.author), {title} (the document title), "
+                "{filename}, {date} and {time} in the reader's locale, or {date:FORMAT} / "
+                "{time:FORMAT} with a Word picture such as {date:d MMMM yyyy} or {time:HH:mm}. "
+                "Anything else in braces is literal text."
             ),
         }
         band: dict[str, Any] = {
@@ -414,7 +527,28 @@ class Schema:
             "type": "object",
             "required": ["blocks"],
             "properties": {
-                "title": {"type": "string"},
+                "title": {
+                    "type": "string",
+                    "description": (
+                        "The document title: docProps/core.xml dc:title, what Word shows in File > "
+                        "Info and what a {title} field in a header or footer shows. Not rendered in "
+                        "the body; write a heading for that."
+                    ),
+                },
+                "meta": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "description": "Document properties beyond the title (which is the top-level `title`).",
+                    "properties": {
+                        "author": {
+                            "type": "string",
+                            "description": (
+                                "docProps/core.xml dc:creator: Word's Author property, and what an "
+                                "{author} field in a header or footer shows."
+                            ),
+                        },
+                    },
+                },
                 "blocks": {"type": "array", "items": block_ref},
                 "page": {
                     "type": "object",
@@ -427,12 +561,49 @@ class Schema:
                         "size": {"enum": list(Schema.PAGE_SIZES)},
                         "orientation": {"enum": ["portrait", "landscape"]},
                         "margins": {"$ref": "#/$defs/pageMargins"},
-                        "header": {"$ref": "#/$defs/band", "description": "A running header on every page."},
+                        "header": {
+                            "$ref": "#/$defs/band",
+                            "description": (
+                                "A running header on every page. With a firstHeader, every page but "
+                                "the first; with an evenHeader, the odd pages."
+                            ),
+                        },
                         "footer": {
                             "$ref": "#/$defs/band",
                             "description": (
                                 "A running footer on every page -- where a multi-page document "
-                                "carries its page numbers."
+                                "carries its page numbers. With a firstFooter, every page but the "
+                                "first; with an evenFooter, the odd pages."
+                            ),
+                        },
+                        "firstHeader": {
+                            "oneOf": [{"$ref": "#/$defs/band"}, {"$ref": "#/$defs/emptyBand"}],
+                            "description": (
+                                "The header of the FIRST page only, in place of header there (Word's "
+                                '"Different first page"). {"blocks": []} leaves page one with no '
+                                "header when header is set."
+                            ),
+                        },
+                        "firstFooter": {
+                            "oneOf": [{"$ref": "#/$defs/band"}, {"$ref": "#/$defs/emptyBand"}],
+                            "description": (
+                                "The footer of the first page only, in place of footer there. Without "
+                                'it the footer is on the first page too. {"blocks": []} leaves page '
+                                "one with no footer when footer is set."
+                            ),
+                        },
+                        "evenHeader": {
+                            "oneOf": [{"$ref": "#/$defs/band"}, {"$ref": "#/$defs/emptyBand"}],
+                            "description": (
+                                "The header of even pages (Word's 'Different odd and even pages'); "
+                                "header is then the odd pages'. For a bound, two-sided document."
+                            ),
+                        },
+                        "evenFooter": {
+                            "oneOf": [{"$ref": "#/$defs/band"}, {"$ref": "#/$defs/emptyBand"}],
+                            "description": (
+                                "The footer of even pages; footer is then the odd pages'. Without it "
+                                "the footer is on even pages too."
                             ),
                         },
                     },
@@ -513,6 +684,17 @@ class Schema:
                     },
                 },
                 "band": band,
+                "emptyBand": {
+                    "type": "object",
+                    "required": ["blocks"],
+                    "additionalProperties": False,
+                    "description": (
+                        'An empty header or footer: {"blocks": []} as a first or even band leaves '
+                        "that page with none. (PHP's {blocks} band with content is not in this port "
+                        "yet; only the empty one is.)"
+                    ),
+                    "properties": {"blocks": {"type": "array", "maxItems": 0}},
+                },
                 "block": {"oneOf": list(blocks.values())},
             },
         }

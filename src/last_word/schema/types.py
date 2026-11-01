@@ -131,10 +131,19 @@ Block = (
 )
 
 
+class Meta(TypedDict, total=False):
+    """Document properties beyond the title. `author` is docProps/core.xml
+    dc:creator; the title is the top-level `title` (there is no `meta.title`)."""
+
+    author: str
+
+
 class Doc(TypedDict, total=False):
-    """`{title?, blocks}` -- the whole document model."""
+    """`{title?, meta?, page?, blocks}` -- the whole document model. `page`
+    (size, margins, the six bands) is left untyped here; see `json_schema()`."""
 
     title: str
+    meta: Meta
     blocks: list[Block]
 
 
@@ -166,6 +175,7 @@ __all__ = [
     "ImageBlock",
     "ListBlock",
     "ListItem",
+    "Meta",
     "PageBreakBlock",
     "ParagraphBlock",
     "QuoteBlock",

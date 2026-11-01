@@ -33,7 +33,7 @@ from ..helpers.php import (
 )
 from ..helpers.chart import label as chart_label
 from .schema import Schema
-from .validator import _HEX6, _IMAGE_SRC, Validator
+from .validator import _HEX6, _IMAGE_SRC, Validator, is_meta_object
 
 
 class Repairer:
@@ -62,6 +62,9 @@ class Repairer:
                 del out["title"]
                 self._note("title", "dropped non-string title")
 
+        if "meta" in out:
+            out = self._repair_meta(out)
+
         if out.get("blocks") is None or not is_list(out.get("blocks")):
             out["blocks"] = []
             self._note("blocks", 'defaulted missing/invalid "blocks" to []')
@@ -69,6 +72,36 @@ class Repairer:
         out["blocks"] = self._repair_blocks(out["blocks"], "blocks")
 
         return {"doc": out, "notes": self._notes}
+
+    def _repair_meta(self, doc: dict[str, Any]) -> dict[str, Any]:
+        """`meta` (PHP 0.16.0 `repairMeta()`): `meta.title` moves to the top-level
+        `title` when there is none -- first, as PHP's `['title' => ...] + $doc`
+        puts it -- and is dropped when there is; a scalar author is coerced to
+        text and any other non-text author dropped; a `meta` that is not an
+        object is dropped. Each with a note. Copies `meta` before editing it.
+        """
+        meta = doc["meta"]
+        if not is_meta_object(meta):
+            del doc["meta"]
+            self._note("meta", "dropped a meta that is not an object")
+            return doc
+        meta = dict(meta) if isinstance(meta, dict) else meta
+        if isinstance(meta, dict) and "title" in meta:
+            if "title" not in doc and isinstance(meta["title"], str):
+                doc = {"title": meta["title"], **doc}
+                self._note("meta.title", "moved meta.title to the document title")
+            else:
+                self._note("meta.title", 'dropped meta.title: the document title is the top-level "title"')
+            del meta["title"]
+        if isinstance(meta, dict) and "author" in meta and not isinstance(meta["author"], str):
+            if is_scalar(meta["author"]):
+                meta["author"] = php_str(meta["author"])
+                self._note("meta.author", "coerced a non-text author to text")
+            else:
+                del meta["author"]
+                self._note("meta.author", "dropped a non-text author")
+        doc["meta"] = meta
+        return doc
 
     # ─── Blocks ──────────────────────────────────────────────────────────
 

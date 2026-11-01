@@ -174,6 +174,9 @@ peers' (`.ai/knowledge/last-word-spec.md`, and `documents.md` §5.4 for 9–11):
 | `test_images.py` | vector 7 — sniffing and the 6.5in cap, asserted on the MODEL |
 | `test_chart.py` | the `chart` block (last-word#4), case for case with PHP's `ChartTest`; `tests/data/charts.json` is the shared fixture `test_parity_php.py` also writes through PHP, workbook parts included |
 | `test_footnotes.py` | footnote runs (validate, repair, write, read), case for case with PHP's `FootnoteTest`, plus the parts held byte-identical to the PHP writer |
+| `test_first_page_bands.py` | `page.firstHeader` / `firstFooter` / `evenHeader` / `evenFooter`: slot-numbered parts, `w:titlePg` / `w:evenAndOddHeaders`, read-back rules, case for case with PHP's `FirstPageBandsTest` less its template and `{blocks}` cases |
+| `test_band_fields.py` | header/footer field tokens, `Schema.split_field_tokens` / `field_token_of`, and `meta.author`, case for case with PHP's `BandFieldsTest` |
+| `test_bands_parity_php.py` | the same constructs part for part against the PHP writer, plus digests pinning that nothing written before 0.9.0 moved (PHP's own 0.15.0 goldens, which this port's 0.8.0 matched) |
 | `test_page_geometry.py` | `page.margins.header` / `.footer` and `Schema.page_margins()`, case for case with PHP's `PageGeometryTest` |
 | `test_cross_read.py` | a frozen Node-written `.docx` read back |
 | `test_legacy_formats.py` | `.doc` / `.odt` / `.rtf` read as the `.docx` does, held to the PHP read (`tests/data/formats/report.read.json`) as JSON text; refusals by name; the hostile-input guards on files `tests/legacy_files.py` builds |

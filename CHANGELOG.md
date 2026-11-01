@@ -11,6 +11,127 @@ minor.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-01
+
+Mirrors `particle-academy/last-word` 0.16.0 (8b32d04), less its template and
+`{blocks}` band parts (see Not covered).
+
+**What you must do: nothing, unless you want first or even bands, the new
+header/footer fields or `meta.author`.** With no variant band, no `meta` and
+none of the new tokens, every document writes exactly what 0.8.0 wrote, part for
+part (pinned by part digests: PHP's own goldens from released 0.15.0, which
+released 0.8.0 of this port reproduced before any of this was written). Two
+read-side changes and one write-side change can touch an existing document; see
+Changed. Release order: **`fancy-conformance` 0.41.0 first** (this package's
+tests are pinned to it exactly; nothing at runtime depends on it).
+
+### Added
+
+- **First-page and even-page bands: `page.firstHeader`, `page.firstFooter`,
+  `page.evenHeader`, `page.evenFooter`**, each the one-line shape of
+  `page.header` (`{left, center, right, size, color}`), or the empty
+  `{"blocks": []}`. `page.header` stays "every page"; with a `firstHeader` it
+  is every page but the first, with an `evenHeader` the odd pages. A kind with
+  no variant shows its default on those pages too. An empty variant
+  (`{"blocks": []}`, or its one-line equivalent, a band with no text such as
+  `{}`, which writes the same bytes) blanks that page when the kind has a
+  default band, and asks for nothing otherwise. Written as Word's `first` /
+  `even` header references (`w:titlePg`, `w:evenAndOddHeaders` in settings),
+  parts numbered by slot: `{kind}1.xml` default (unchanged), `{kind}2.xml`
+  first, `{kind}3.xml` even, relationship ids `rId{Kind}N`. `read()` returns
+  them from any producer: a first (even) variant only while `w:titlePg`
+  (`w:evenAndOddHeaders`) is on, skipping one that names the same part as the
+  default, and `{"blocks": []}` for a missing or empty variant part while the
+  default has content. Every part byte-identical to PHP's for the same document.
+- **Field tokens in header and footer text**: `{section}`, `{sectionpages}`,
+  `{author}`, `{title}`, `{filename}`, `{date}`, `{time}`, and
+  `{date:FORMAT}` / `{time:FORMAT}` with a Word date-time picture (one or more
+  characters, none of `{`, `}`, `"` or a backslash), beside `{page}` /
+  `{pages}`. Each is a live complex field, written by the same code `{page}`
+  already used, its instruction between single spaces (` DATE \@ "FORMAT" `).
+  The cached result is deterministic: `1` for page and section numbers;
+  `meta.author` and the `title` for AUTHOR and TITLE (empty without one);
+  nothing for DATE, TIME and FILENAME (no clock: the same document still writes
+  the same bytes). Without a picture, DATE and TIME show in the reader's locale.
+  Anything else in braces stays literal, and every token stays literal in the
+  body. `read()` returns any producer's field as its token, matching its first
+  word in any case, keeping a `\@` picture the grammar can hold and dropping
+  every other switch. `Schema.FIELD_TOKEN`, `Schema.split_field_tokens()` and
+  `Schema.field_token_of()` are the grammar (PHP `Schema::FIELD_TOKEN`,
+  `splitFieldTokens()`, `fieldTokenOf()`).
+- **`meta.author`**: `docProps/core.xml` `dc:creator`, written after `dc:title`
+  and read back (as `meta`, right after `title`). A core part is written for a
+  title or a non-empty author. The title stays the top-level `title`; there is
+  no `meta.title` (validation refuses it and `validate_and_repair` moves it to
+  `title`, or drops it when there is one), so `dc:title` has one slot.
+  `validate_and_repair` also coerces a scalar author to text and drops a `meta`
+  that is not an object.
+- `Schema.PAGE_BANDS` / `Schema.PAGE_BAND_SLOTS`; `json_schema()` gains
+  `properties.meta`, the four variants (`oneOf` `band` / `emptyBand`) and
+  `$defs.emptyBand`; `schema.types.Meta`.
+- Agent guide: the first-page band, the letterhead option and the field tokens
+  (the guide's bytes and hash changed; the PHP and Node packages carry the same
+  bytes). New sha256:
+  `6d70d774cf630c0c40813d70ddd00191cc8a0b57a2cd3c603cae54f64a9501fa`.
+
+### Changed
+
+- **`read()` of a document with `w:titlePg` on, or `w:evenAndOddHeaders` on,
+  now returns `firstHeader` / `firstFooter` / `evenHeader` / `evenFooter`.**
+  Before, only the default band was read and the first/even ones were lost.
+  Consumer action: none to keep working; a document read and written back now
+  keeps its different first page. If you compared `page` keys exactly, expect
+  the new ones.
+- **`read()` of a SECTIONPAGES field now returns `{sectionpages}`** (it was
+  `{pages}`). Consumer action: none; in a one-section document both show the
+  same number, and writing `{sectionpages}` back writes SECTIONPAGES again.
+- **A header or footer whose text already contained one of the new tokens
+  literally** (say `{date}`) now writes a live field there. Consumer action:
+  only if you meant the braces literally; write `{Date}` or another non-token
+  spelling.
+
+### Fixed
+
+- A field that is not a token, in a one-line header or footer from another
+  producer (a STYLEREF, say), lost its cached result on read; it now keeps it as
+  text, both as a complex field and as a `w:fldSimple`.
+
+### Not covered (divergences from PHP 0.16.0)
+
+- **`templateFirstPageOnly` is not applicable here.** This port does not write
+  from a template at all: `to_bytes()` / `write()` take no `template` or
+  `templateParts` option (PHP 0.13.0, last-word#5, unported), so there is no
+  template letterhead for the option to place, and no option to add. Conformance
+  rows 0054-0060 are reported as skips naming this reason.
+- **`{blocks}` headers and footers with content are still not in this port**
+  (PHP 0.14.0, last-word#6). A variant is a one-line band or the empty
+  `{"blocks": []}`; **validation refuses a variant whose `blocks` has content**
+  (a Python-only message: "... is not supported by this port yet ..."), rather
+  than writing a blank or nothing where the document asked for text. It also
+  refuses a non-list `blocks` and a variant mixing `blocks` with slot keys,
+  with PHP's messages. `page.header` / `page.footer` are validated exactly as
+  in 0.8.0, so nothing that validated before stops validating. Consumer action
+  if you hit the refusal: write the variant as a one-line band. Conformance rows
+  0061, 0064, 0065 and 0069 (each uses a `{blocks}` band with content) are
+  reported as skips naming this reason; 0063 and 0066 (the empty one) pass.
+- **"Footnotes stay refused in every band"** holds trivially: one-line bands
+  hold no runs, so there is no footnote to refuse.
+- `read()` of a variant part that one line cannot hold reads its first paragraph
+  as a one-line band (as `header` / `footer` always have here); PHP returns the
+  `{blocks}` form.
+
+### Notes
+
+- `fancy-conformance` is pinned at `0.41.0` (`PINNED_SUITE_VERSION` and the CI
+  checkout ref). `last-word/docx-constructs`: 68 pass, 11 are the skips above,
+  none fail; the harness now takes a row's whole input `{doc, template?,
+  options?}` (refusing a row that carries a template or options rather than
+  writing it without them), and implements `bandParts`, `bandFields` and
+  `coreProps`. A ledger turns exactly those 11 failures into named skips and
+  fails if any of them starts passing. `doc-model/shared` 0001 (`meta`) passes;
+  0002 still fails on `page.background` / `page.border` alone (now asserted:
+  the four band variants it lists are all in this schema), and 0003 as before.
+
 ## [0.8.0] - 2026-11-01
 
 Mirrors `particle-academy/last-word` 0.15.0 (4172ed5).

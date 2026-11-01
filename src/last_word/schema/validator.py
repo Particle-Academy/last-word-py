@@ -275,6 +275,60 @@ def _check_paragraph_props(block: dict, path: str, errors: list[dict[str, str]])
 _FOOTNOTE_REFUSE_MAX_DEPTH = 64
 
 
+def is_meta_object(meta: Any) -> bool:
+    """PHP's `is_array($meta) && ($meta === [] || !array_is_list($meta))`: an
+    object, or the empty array PHP decodes `{}` to."""
+    return isinstance(meta, dict) or (isinstance(meta, list) and meta == [])
+
+
+def _validate_meta(meta: Any, errors: list[dict[str, str]]) -> None:
+    """`meta` (PHP 0.16.0): an object whose `author` is text. The title is the
+    top-level `title`, not `meta.title` -- one slot for dc:title, so the two
+    cannot disagree; repair moves a `meta.title` there."""
+    if not is_meta_object(meta):
+        errors.append(_error("meta", "meta must be an object ({author?})"))
+        return
+    if not isinstance(meta, dict):
+        return
+    if "author" in meta and not isinstance(meta["author"], str):
+        errors.append(_error("meta.author", "meta author must be text (docProps/core.xml dc:creator)"))
+    if "title" in meta:
+        errors.append(_error("meta.title", 'the document title is the top-level "title", not meta.title'))
+
+
+def _validate_blocks_variant(band: dict, kind: str, errors: list[dict[str, str]]) -> None:
+    """A first or even band in the `{blocks}` form.
+
+    The mixing and list checks are PHP's `validateBlocksBand()`, message for
+    message. The last is this port's own: its bands are one-line, so the only
+    `{blocks}` band it can write is the EMPTY one (a blank page). A variant with
+    content is refused rather than written as something it does not say.
+    `page.header` / `page.footer` are not checked here, exactly as before
+    0.9.0, so no document that validated before stops validating.
+    """
+    mixed = [k for k in ("left", "center", "right", "size", "color") if k in band]
+    if mixed:
+        errors.append(
+            _error(
+                f"page.{kind}",
+                f"page {kind} is either {{left, center, right, size, color}} or {{blocks}}, never both "
+                f"(found blocks with {', '.join(mixed)})",
+            )
+        )
+    blocks = band["blocks"]
+    if not is_list(blocks):
+        errors.append(_error(f"page.{kind}.blocks", f"page {kind} blocks must be a list of block objects"))
+        return
+    if blocks:
+        errors.append(
+            _error(
+                f"page.{kind}.blocks",
+                f"page {kind} with blocks is not supported by this port yet: write a one-line band "
+                f'({{left?, center?, right?}}), or {{"blocks": []}} for a blank page',
+            )
+        )
+
+
 class Validator:
     """Mirrors `LastWord\\Schema\\Validator`."""
 
@@ -330,7 +384,7 @@ class Validator:
                                 f"{distance}: a number of points, 0 or more (36 by default)",
                             )
                         )
-                for kind in ("header", "footer"):
+                for kind in Schema.PAGE_BANDS:
                     band = page.get(kind)
                     if band is None:
                         continue
@@ -340,6 +394,9 @@ class Validator:
                         )
                         continue
                     if isinstance(band, list):
+                        continue
+                    if kind not in ("header", "footer") and "blocks" in band:
+                        _validate_blocks_variant(band, kind, errors)
                         continue
                     for slot in ("left", "center", "right"):
                         if band.get(slot) is not None and not isinstance(band[slot], str):
@@ -353,6 +410,9 @@ class Validator:
 
         if "title" in doc and not isinstance(doc["title"], str):
             errors.append(_error("title", "title must be a string when present"))
+
+        if "meta" in doc:
+            _validate_meta(doc["meta"], errors)
 
         if "blocks" not in doc:
             errors.append(

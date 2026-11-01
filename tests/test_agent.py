@@ -17,6 +17,7 @@ def test_exports_a_json_schema_for_llm_tool_registration() -> None:
     assert schema["required"] == ["blocks"]
     assert set(schema["properties"]) == {
         "title",
+        "meta",
         "blocks",
         "page",
         "defaultFont",
@@ -32,6 +33,7 @@ def test_exports_a_json_schema_for_llm_tool_registration() -> None:
         "pageMargins",
         "footnote",
         "band",
+        "emptyBand",
         "block",
     }
     assert len(schema["$defs"]["block"]["oneOf"]) == len(Schema.BLOCK_TYPES)

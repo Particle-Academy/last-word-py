@@ -39,7 +39,10 @@ markdown = last_word.to_markdown(imported)
 
 ## The document model
 
-A `Doc` is `{"title"?, "blocks"}`. Blocks are JSON-friendly discriminated
+A `Doc` is `{"title"?, "meta"?, "page"?, "blocks"}`. `title` is
+`docProps/core.xml` `dc:title`; `meta: {"author"}` is `dc:creator` (there is no
+`meta.title`: validation refuses it and `validate_and_repair` moves it to
+`title`). Blocks are JSON-friendly discriminated
 unions — exactly what an agent emits:
 
 | Block | Shape |
@@ -148,6 +151,37 @@ things: the header at `header` from the top, the body from `top`, the footer's
 last line at `footer` from the bottom, footnotes at the foot of the body (above
 `bottom`); Word pushes the body down when a header is taller than `top - header`
 leaves room for, and up when a footer is.
+
+### Headers and footers
+
+`page.header` / `page.footer` are one-line bands, `{"left"?, "center"?,
+"right"?, "size"?, "color"?}`, on every page. Beside them:
+
+- **`page.firstHeader` / `page.firstFooter`** replace them on page one only
+  (Word's "Different first page", `w:titlePg`); **`page.evenHeader` /
+  `page.evenFooter`** on even pages (`w:evenAndOddHeaders` in settings). A kind
+  with no variant shows its default on those pages too.
+- An empty variant -- `{"blocks": []}`, or a band with no text such as `{}` --
+  leaves that page with no header (footer) when the kind has a default band,
+  and asks for nothing otherwise. `read()` returns it as `{"blocks": []}`.
+- Parts are numbered by slot: `header1.xml` default, `header2.xml` first,
+  `header3.xml` even (relationship ids `rIdHeader1` ... `rIdHeader3`).
+
+Band text takes live Word fields: `{page}`, `{pages}`, `{section}`,
+`{sectionpages}`, `{author}` (`meta.author`), `{title}`, `{filename}`, `{date}`,
+`{time}`, and `{date:FORMAT}` / `{time:FORMAT}` with a Word picture
+(`{date:d MMMM yyyy}`, `{time:HH:mm}`). Names are lower-case and exact; anything
+else in braces is literal, and every token is literal in the body. Each is a
+complex field whose cached result is deterministic: `1` for the page and section
+numbers, the author and title for AUTHOR and TITLE, nothing for DATE, TIME and
+FILENAME. `Schema.split_field_tokens()` / `Schema.field_token_of()` are the
+grammar.
+
+**Not in this port yet** (PHP has them): `{blocks}` headers and footers with
+content (a letterhead with a logo), so a variant is either a one-line band or
+the empty `{"blocks": []}`, and validation refuses a variant with blocks in it;
+and writing from a template, so PHP's `templateFirstPageOnly` option has nothing
+to apply to here.
 
 ## Reading .doc, .odt and .rtf
 
@@ -278,7 +312,7 @@ difference.
 ## Cross-language parity, as a test result
 
 The metadata slots match both mirrors exactly: the title lives in
-`docProps/core.xml` (`dc:title`) and a code block's `language` in a
+`docProps/core.xml` (`dc:title`, with `meta.author` as `dc:creator`) and a code block's `language` in a
 `lastword:code:{lang}` content-control tag (quotes use `lastword:quote`). The
 **same file opens in any of the three engines**, and title plus code language
 round-trip in every direction.

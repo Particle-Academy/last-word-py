@@ -62,6 +62,17 @@ genre, lead with what the reader must know or decide, and analyse rather than re
   `{page}` and `{pages}` are live page fields. `page.header` works the same way (use it
   for a classification or audience line on long reports). `margins` also takes `header`
   and `footer`: points from the page edge to the header and to the footer (36 by default).
+- First page apart: `page:{firstHeader:{blocks:[{type:"paragraph", runs:[{text:"ACME LTD",
+  bold:true}]}, {type:"paragraph", runs:[{text:"1 Example Street, Exampleton"}]}]},
+  header:{left:"Acme | Proposal 42", right:"Page {page}"}}`. `firstHeader` / `firstFooter`
+  replace `header` / `footer` on page one only; without a `firstFooter` the footer is on page
+  one too, and `firstFooter:{blocks:[]}` leaves page one without it. `evenHeader` /
+  `evenFooter` do the same for even pages of a two-sided document. To keep a house
+  letterhead template on page one only, write with the option `templateFirstPageOnly: true`.
+- Header and footer text also takes `{date}`, `{date:d MMMM yyyy}`, `{time}`, `{author}`,
+  `{title}`, `{filename}`, `{section}` and `{sectionpages}`: live Word fields, not typed
+  values. `{title}` shows the document `title`; `{author}` shows `meta:{author:"..."}`. In
+  the body they are plain text.
 - Footnotes: a run with `text:""` and a `footnote`, placed right after the words it
   annotates: `runs:[{text:"Revenue grew 18%"}, {text:"", footnote:{blocks:[{type:"paragraph",
   runs:[{text:"Audited figures, FY2026; restated for the Q2 disposal."}]}]}}, {text:" on the prior year."}]`.

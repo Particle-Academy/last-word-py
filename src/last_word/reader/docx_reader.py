@@ -59,6 +59,7 @@ from ..archive import office_template
 from ..archive.source_archive import SourceArchive
 from ..helpers.chart import DEFAULT_ASPECT
 from ..helpers.php import is_numeric, php_float, php_int_round, php_round
+from ..schema.schema import Schema
 from ..writer.docx_writer import SDT_TAG_CODE, SDT_TAG_QUOTE, split_columns
 from . import chart_reader
 
@@ -333,6 +334,8 @@ class DocxReader:
         self._title: str | None = None
         # header/footer part name (without leading word/) -> XML bytes.
         self._band_parts: dict[str, bytes] = {}
+        # `w:evenAndOddHeaders` in word/settings.xml: even pages have their own bands.
+        self._even_and_odd_headers = False
         # chart part name (without leading word/) -> XML bytes.
         self._chart_parts: dict[str, bytes] = {}
         # The section's text column in twips, read before any block so a chart
@@ -376,6 +379,10 @@ class DocxReader:
         doc: dict[str, Any] = {}
         if self._title is not None and self._title != "":
             doc["title"] = self._title
+        # meta.author (PHP 0.16.0): dc:creator, beside the title it shares a part with.
+        author = self._parse_core_element("creator")
+        if author is not None:
+            doc["meta"] = {"author": author}
 
         # Section geometry and document defaults are surfaced ONLY when they
         # differ from what the writer produces unasked, for the same reason
@@ -384,11 +391,9 @@ class DocxReader:
         sect_pr = _first_child_by_name(body, "sectPr") if body is not None else None
         page = _parse_page(sect_pr)
         if sect_pr is not None:
-            for kind in ("header", "footer"):
-                band = self._parse_band(sect_pr, kind)
-                if band is not None:
-                    page = page or {}
-                    page[kind] = band
+            for key, band in self._parse_bands(sect_pr).items():
+                page = page or {}
+                page[key] = band
         if page is not None:
             doc["page"] = page
         doc.update(self._parse_doc_defaults())
@@ -399,17 +404,58 @@ class DocxReader:
             doc["sourceKind"] = office_template.TEMPLATE
         return doc
 
-    def _parse_band(self, sect_pr: ET.Element, kind: str) -> dict[str, Any] | None:
-        """The section's DEFAULT header or footer as a band. Mirrors PHP DocxReader::parseBand()."""
-        part: bytes | None = None
+    def _parse_bands(self, sect_pr: ET.Element) -> dict[str, dict[str, Any]]:
+        """The section's headers and footers, by model key, in `Schema.PAGE_BANDS` order.
+
+        `header` / `footer` from the DEFAULT references, and (PHP 0.16.0)
+        `firstHeader` / `firstFooter` from the FIRST ones while `w:titlePg` is
+        on, `evenHeader` / `evenFooter` from the EVEN ones while settings turn on
+        `w:evenAndOddHeaders`. A switch that is off makes its references nothing,
+        as in Word. A variant naming the same part as the default is not
+        repeated; one with no part, or an empty part, while the default has
+        content, is `{"blocks": []}`: that page shows no header in Word, and the
+        model says so. Mirrors PHP `DocxReader::parseBands()`.
+        """
+        title_pg_el = _first_child_by_name(sect_pr, "titlePg")
+        title_pg = title_pg_el is not None and _toggle_on(_w_attr(title_pg_el, "val"))
+        found: dict[str, dict[str, Any]] = {}
+        for kind in ("header", "footer"):
+            default = self._band_target(sect_pr, kind, "default")
+            band = self._parse_band_part(default) if default is not None else None
+            if band is not None:
+                found[kind] = band
+            for variant_type, on in (("first", title_pg), ("even", self._even_and_odd_headers)):
+                if not on:
+                    continue
+                key = variant_type + kind.capitalize()
+                target = self._band_target(sect_pr, kind, variant_type)
+                if target is not None and target == default:
+                    continue
+                variant = self._parse_band_part(target) if target is not None else None
+                if variant is None and band is not None:
+                    variant = {"blocks": []}
+                if variant is not None:
+                    found[key] = variant
+        return {key: found[key] for key in Schema.PAGE_BANDS if key in found}
+
+    def _band_target(self, sect_pr: ET.Element, kind: str, ref_type: str) -> str | None:
+        """The part name (`header1.xml`) a reference of this type names, or None.
+
+        The last reference of a type wins, as it always has for the default; a
+        reference with no type is the default. PHP `bandTarget()`.
+        """
+        name: str | None = None
         for node in list(sect_pr):
-            if _local(node.tag) == f"{kind}Reference" and _w_attr(node, "type") in ("default", None):
+            node_type = _w_attr(node, "type")
+            if _local(node.tag) == f"{kind}Reference" and (node_type if node_type is not None else "default") == ref_type:
                 target = self._rels.get(_w_attr(node, "id") or "", {}).get("target")
-                part = (
-                    self._band_parts.get(target.replace("\\", "/").lstrip("/"))
-                    if isinstance(target, str)
-                    else None
-                )
+                name = target.replace("\\", "/").lstrip("/") if isinstance(target, str) else None
+        return name
+
+    def _parse_band_part(self, name: str) -> dict[str, Any] | None:
+        """One header or footer part as a one-line band, or None. PHP `parseBandPart()`,
+        less its `{blocks}` reading (this port's bands are one-line)."""
+        part = self._band_parts.get(name)
         if part is None:
             return None
         root = _parse_xml(part)
@@ -427,7 +473,12 @@ class DocxReader:
             child = stack.pop()
             name = _local(child.tag)
             if name == "fldSimple":
-                segments[-1] += _field_token(_w_attr(child, "instr") or "")
+                token = _field_token(_w_attr(child, "instr") or "")
+                if token != "":
+                    segments[-1] += token
+                else:
+                    # Not a token: its cached result is the text (PHP 0.16.0).
+                    stack.extend(list(child)[::-1])
             elif name == "r":
                 if first_run is None:
                     first_run = child
@@ -436,10 +487,12 @@ class DocxReader:
                 kind_ = _w_attr(child, "fldCharType")
                 if kind_ == "begin":
                     field = ""
-                elif kind_ == "separate" and field is not None:
-                    if isinstance(field, str):
-                        segments[-1] += _field_token(field)
-                    field = False
+                elif kind_ == "separate" and isinstance(field, str):
+                    token = _field_token(field)
+                    segments[-1] += token
+                    # A token's cached result ("1", the author) is skipped; any
+                    # other field's is its text, as in PHP's blocks band.
+                    field = False if token != "" else None
                 elif kind_ == "end":
                     field = None
             elif name == "instrText" and isinstance(field, str):
@@ -523,6 +576,15 @@ class DocxReader:
         )
 
         self._core_xml = archive.read("docProps/core.xml")
+        # w:evenAndOddHeaders lives in the settings part the document's
+        # `settings` relationship names (PHP 0.16.0).
+        settings_target = _rel_target_of_type(rels_xml, "settings") if rels_xml is not None else None
+        settings_xml = (
+            archive.read("word/" + settings_target.replace("\\", "/").lstrip("/"))
+            if settings_target is not None
+            else None
+        )
+        self._even_and_odd_headers = settings_xml is not None and _settings_even_and_odd(settings_xml)
         self._styles_xml = archive.read("word/styles.xml")
 
         self._media = {}
@@ -602,15 +664,21 @@ class DocxReader:
 
     def _parse_core_title(self) -> str | None:
         """dc:title from docProps/core.xml -- None when missing or empty."""
+        return self._parse_core_element("title")
+
+    def _parse_core_element(self, local_name: str) -> str | None:
+        """One Dublin Core element's text from docProps/core.xml (`title`,
+        `creator`) -- None when the part is missing, unparsable, declares a
+        DOCTYPE, or the element is absent or empty. PHP `parseCoreElement()`."""
         if self._core_xml is None:
             return None
         root = _parse_xml(self._core_xml)
         if root is None:
             return None
-        title = _first_child_by_name(root, "title")
-        if title is None:
+        element = _first_child_by_name(root, local_name)
+        if element is None:
             return None
-        content = _text_content(title)
+        content = _text_content(element)
         return None if content == "" else content
 
     @staticmethod
@@ -1430,9 +1498,10 @@ _HEX6_BARE_RE = re.compile(r"^[0-9A-F]{6}$")
 
 
 def _field_token(instr: str) -> str:
-    """A field instruction as a band token: PAGE -> {page}, NUMPAGES -> {pages}, else ''."""
-    word = re.split(r"[ \\]", instr.strip())[0].upper() if instr.strip() else ""
-    return {"PAGE": "{page}", "NUMPAGES": "{pages}", "SECTIONPAGES": "{pages}"}.get(word, "")
+    """A field instruction as a band token (`Schema.field_token_of()`): PAGE {page},
+    NUMPAGES {pages}, SECTIONPAGES {sectionpages}, `DATE \\@ "d MMMM yyyy"`
+    {date:d MMMM yyyy} ... and '' for any other field."""
+    return Schema.field_token_of(instr) or ""
 
 
 def _first_child_by_name(parent: ET.Element | None, local_name: str) -> ET.Element | None:
@@ -1504,6 +1573,16 @@ def _merge_runs(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 continue
         merged.append(run)
     return merged
+
+
+def _settings_even_and_odd(xml: bytes) -> bool:
+    """Whether a settings part turns on even/odd headers. A DOCTYPE leaves it off.
+    PHP `settingsEvenAndOdd()`."""
+    if b"<!doctype" in xml.lower():
+        return False
+    root = _parse_xml(xml)
+    el = _first_child_by_name(root, "evenAndOddHeaders") if root is not None else None
+    return el is not None and _toggle_on(_w_attr(el, "val"))
 
 
 def _rel_target_of_type(rels_xml: bytes, rel_type: str) -> str | None:
