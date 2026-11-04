@@ -61,6 +61,22 @@ def declares_doctype(xml: bytes | str) -> bool:
     return False
 
 
+def refused(xml: bytes | str) -> bool:
+    """Whether a part is refused, as opposed to merely malformed or fine: it declares a
+    DOCTYPE, or it is in an encoding the parser cannot read."""
+    if xml == b"" or xml == "":
+        return False
+    if prolog_declares_doctype(xml):
+        return True
+    try:
+        _parse(_bytes(xml))
+    except (_Refused, ValueError, LookupError):
+        return True
+    except ET.ParseError:
+        return False
+    return False
+
+
 def prolog_declares_doctype(xml: bytes | str) -> bool:
     """Whether a DOCTYPE comes before the root element, for what a walk can read."""
     text = xml.decode("latin-1") if isinstance(xml, bytes) else xml

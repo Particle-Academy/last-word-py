@@ -59,6 +59,7 @@ _TEMPLATE_MESSAGES = {
     "already_document": "This package is already a document.",
     "not_convertible": "This package has no single content-type declaration that can be rewritten.",
     "odf_mimetype": "An OpenDocument package must store its mimetype entry first and uncompressed.",
+    "refused_declaration": "This package's content types declare a DOCTYPE, or cannot be read, so what it declares cannot be checked.",
     "bad_target": 'The conversion target must be "document" or "template".',
 }
 
@@ -68,7 +69,7 @@ class OfficeTemplateRefused(RuntimeError):
 
     Mirrors PHP `LastWord\\Exceptions\\OfficeTemplateRefused`: `macro_enabled`,
     `family_mismatch`, `already_template`, `already_document`, `not_convertible`,
-    `odf_mimetype`, `bad_target`. Branch on `reason`; the message is for people.
+    `odf_mimetype`, `bad_target`, `refused_declaration`. Branch on `reason`; the message is for people.
     """
 
     def __init__(self, reason: str) -> None:

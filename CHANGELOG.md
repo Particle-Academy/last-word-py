@@ -18,6 +18,10 @@ minor.
   part raises as it did, and any other part reads as absent. **Consumer action:** none;
   no Word or ODF file has a DOCTYPE. A part that merely mentions the word in its text is
   no longer refused.
+- A package whose `[Content_Types].xml` declares a DOCTYPE, or is in an encoding the
+  parser cannot read, is refused whole, with `OfficeTemplateRefused` reason
+  `refused_declaration`, as a macro-enabled template is. **Consumer action:** none, unless
+  you branch on `reason`. A merely malformed one reads as it did.
 
 ## [0.11.0] - 2026-11-03
 

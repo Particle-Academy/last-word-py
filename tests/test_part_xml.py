@@ -22,6 +22,7 @@ from xml.etree import ElementTree as ET
 import pytest
 
 import last_word
+from last_word.exceptions import OfficeTemplateRefused
 
 MARKER = "LWBASE"
 ENTITY = "LWINT"
@@ -171,6 +172,54 @@ def test_refuses_a_doctype_in_an_odt_part_by_name(part: str, encoding: str) -> N
     odt[part] = ENCODINGS[encoding](with_doctype(odt[part].decode("utf-8")))
     with pytest.raises(RuntimeError, match="DOCTYPE"):
         last_word.read(rezip(odt))
+
+
+# ---------------- the package's own declaration ----------------
+
+
+def declaring_macros() -> dict[str, bytes]:
+    parts = docx()
+    parts["[Content_Types].xml"] = parts["[Content_Types].xml"].replace(
+        b"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml",
+        b"application/vnd.ms-word.template.macroEnabledTemplate.main+xml",
+    )
+    return parts
+
+
+def test_refuses_a_macro_template_as_it_always_did() -> None:
+    with pytest.raises(OfficeTemplateRefused):
+        last_word.read(rezip(declaring_macros()))
+
+
+@pytest.mark.parametrize("encoding", ENCODINGS)
+def test_refuses_the_package_when_its_declaration_carries_a_doctype(encoding: str) -> None:
+    parts = declaring_macros()
+    parts["[Content_Types].xml"] = ENCODINGS[encoding](with_doctype(parts["[Content_Types].xml"].decode("utf-8")))
+    with pytest.raises(OfficeTemplateRefused) as caught:
+        last_word.read(rezip(parts))
+    assert caught.value.reason == "refused_declaration"
+
+
+def test_refuses_an_encoding_it_cannot_read_which_would_otherwise_declare_nothing() -> None:
+    parts = declaring_macros()
+    parts["[Content_Types].xml"] = declare(parts["[Content_Types].xml"].decode("utf-8"), "UTF-7").encode("utf-8")
+    with pytest.raises(OfficeTemplateRefused):
+        last_word.read(rezip(parts))
+
+
+def test_leaves_a_merely_malformed_declaration_as_it_was() -> None:
+    parts = docx()
+    parts["[Content_Types].xml"] = b"<Types>"
+    assert read(parts).count(MARKER) == 6
+
+
+def test_an_unreadable_encoding_is_a_refusal_not_a_value_error() -> None:
+    parts = docx()
+    parts["word/header1.xml"] = declare(parts["word/header1.xml"].decode("utf-8"), "UTF-7").encode("utf-8")
+    assert read(parts).count(MARKER) == 5
+    parts = docx()
+    parts["word/document.xml"] = declare(parts["word/document.xml"].decode("utf-8"), "UTF-7").encode("utf-8")
+    assert read(parts) == "(refused)"
 
 
 # ---------------- the gate on its own ----------------

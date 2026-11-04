@@ -179,6 +179,10 @@ def convert(data: bytes, to: str | None = None) -> bytes:
 def _ooxml_kind(archive: SourceArchive, types: bytes) -> str:
     declared = _declarations(types)
     if declared is None:
+        # Refused rather than read as unparsable: a package that declares nothing
+        # is a plain document, and its declarations go unchecked.
+        if part_xml.refused(types):
+            raise OfficeTemplateRefused("refused_declaration")
         # Unparsable content types were never looked at before; the reader's own
         # handling of the package is unchanged.
         return DOCUMENT
