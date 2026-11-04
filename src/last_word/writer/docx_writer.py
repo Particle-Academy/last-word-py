@@ -54,6 +54,7 @@ Block -> OOXML mapping:
 
 from __future__ import annotations
 
+import json
 import base64
 import binascii
 import io
@@ -166,6 +167,13 @@ def _hex(value: Any) -> str | None:
 #: The slot a band part is numbered by: `{kind}1` default, `{kind}2` first,
 #: `{kind}3` even (PHP `DocxWriter::SLOT_NUMBERS`).
 _SLOT_NUMBERS = {"default": 1, "first": 2, "even": 3}
+
+#: The number the first part of a later stretch takes: past the first stretch's
+#: slots, as PHP's is past a template's (`DocxWriter::LATER_PART_NUMBER`).
+_LATER_PART_NUMBER = 5
+
+#: A section break's dedicated paragraph takes as little of the page it ends as Word allows.
+_SECTION_PARAGRAPH = '<w:spacing w:before="0" w:after="0" w:line="20" w:lineRule="exact"/><w:rPr><w:sz w:val="2"/></w:rPr>'
 
 
 def _blank_band_xml(kind: str) -> str:
@@ -451,7 +459,10 @@ class DocxWriter:
         # `w:titlePg` / `w:evenAndOddHeaders`: the document has a first (even)
         # band of its own. (PHP also turns them on for a carried template part;
         # this port writes no template parts.)
-        self._title_pg = False
+        self._field_section = "1"
+        self._band_part_at: dict[str, str] = {}
+        self._blank_part: dict[str, str] = {}
+        self._next_part: dict[str, int] = {}
         self._even_and_odd = False
         # The cached results an AUTHOR / TITLE field gets: `meta.author` and
         # the document `title`, or "".
@@ -734,80 +745,70 @@ class DocxWriter:
         return xml
 
     def _build_document_xml(self, doc: dict[str, Any]) -> str:
-        page = page_geometry(doc.get("page"))
+        stretches = Schema.stretches(doc)
+
         # Table grids are laid out against the section's content width, so it
         # has to be known before any block renders. Carrying 9360 as a literal
         # -- which all three engines did -- silently gives a document with
         # narrowed margins a table that no longer matches its own page.
-        self._content_width = page["w"] - page["left"] - page["right"]
-
+        #
         # The title lives in docProps/core.xml (dc:title) -- the cross-language
         # slot -- not in a body paragraph.
-        body = self._render_blocks(doc.get("blocks") or [])
+        geometry: list[dict[str, Any]] = []
+        bodies: list[str] = []
+        for stretch in stretches:
+            page = page_geometry(stretch["doc"].get("page"))
+            geometry.append(page)
+            self._content_width = page["w"] - page["left"] - page["right"]
+            bodies.append(self._render_blocks(list(stretch["blocks"].values())))
 
-        # Header/footer references come FIRST in w:sectPr (before w:pgSz).
-        #
-        # The document's own slots, kind -> reference type -> rId: `header`
-        # (default), `firstHeader` (first), `evenHeader` (even), and the same for
-        # footers, rendered in that order. An empty first or even band blanks
-        # that page when the document's own default band of that kind exists,
-        # and is nothing otherwise. Mirrors PHP 0.16.0 `buildDocumentXml()`,
-        # less the template precedence (this port writes no template parts).
+        # Header/footer references come FIRST in w:sectPr (before w:pgSz). Every
+        # stretch's own parts before any w:sectPr is written: a later stretch's even
+        # band turns even-and-odd on for the whole document. Mirrors PHP
+        # `buildDocumentXml()`, less the template precedence (this port writes no
+        # template parts).
         self._bands = {}
-        page_spec = doc.get("page") if isinstance(doc.get("page"), (dict, list)) else {}
-        own: dict[str, dict[str, str]] = {}
-        for kind in ("header", "footer"):
-            for slot_type, n in _SLOT_NUMBERS.items():
-                key = kind if slot_type == "default" else slot_type + kind.capitalize()
-                spec = page_spec.get(key) if isinstance(page_spec, dict) else None
-                name = f"{kind}{n}"
-                band = _band(spec)
-                xml = self._band_xml(kind, band) if band is not None else None
-                if (
-                    xml is None
-                    and slot_type != "default"
-                    and isinstance(spec, (dict, list))
-                    and "default" in own.get(kind, {})
-                ):
-                    xml = _blank_band_xml(kind)
-                if xml is not None:
-                    self._bands[name] = xml
-                    own.setdefault(kind, {})[slot_type] = f"rId{name.capitalize()}"
+        self._band_part_at = {}
+        self._blank_part = {}
+        self._next_part = {"header": _LATER_PART_NUMBER, "footer": _LATER_PART_NUMBER}
+        own: list[dict[str, dict[str, str]]] = []
+        for k, stretch in enumerate(stretches):
+            page = geometry[k]
+            self._content_width = page["w"] - page["left"] - page["right"]
+            self._field_section = str(k + 1)
+            own.append(self._stretch_bands(stretch, k))
 
-        own_types = {t for slots in own.values() for t in slots}
-        self._title_pg = "first" in own_types
-        self._even_and_odd = "even" in own_types
+        own_types = [{t for slots in o.values() for t in slots} for o in own]
+        title_pg = ["first" in types for types in own_types]
+        self._even_and_odd = any("even" in types for types in own_types)
 
-        # With a switch on, a kind with no part for those pages shows its
-        # default there: the document's own band is on every page unless it
-        # says otherwise.
-        references = ""
-        for kind in ("header", "footer"):
-            slots = dict(own.get(kind, {}))
-            if self._title_pg and "first" not in slots and "default" in slots:
-                slots["first"] = slots["default"]
-            if self._even_and_odd and "even" not in slots and "default" in slots:
-                slots["even"] = slots["default"]
-            for slot_type in _SLOT_NUMBERS:
-                if slot_type in slots:
-                    references += f'<w:{kind}Reference w:type="{slot_type}" r:id="{slots[slot_type]}"/>'
+        seen: dict[str, set[str]] = {}
+        body = ""
+        last = len(stretches) - 1
+        for k, stretch in enumerate(stretches):
+            references = self._section_references(k, own[k], title_pg[k], seen)
+            page = geometry[k]
+            orient = ' w:orient="landscape"' if page["orientation"] == "landscape" else ""
+            sect_pr = (
+                "<w:sectPr>"
+                + references
+                + f'<w:pgSz w:w="{page["w"]}" w:h="{page["h"]}"{orient}/>'
+                f'<w:pgMar w:top="{page["top"]}" w:right="{page["right"]}" '
+                f'w:bottom="{page["bottom"]}" w:left="{page["left"]}" '
+                f'w:header="{page["header"]}" w:footer="{page["footer"]}" w:gutter="0"/>'
+                # CT_SectPr is a sequence: titlePg comes after pgMar (and PHP's
+                # pgBorders, which this port does not write).
+                + ("<w:titlePg/>" if title_pg[k] else "")
+                + "</w:sectPr>"
+            )
+            if k < last:
+                body += bodies[k] + "<w:p><w:pPr>" + _SECTION_PARAGRAPH + sect_pr + "</w:pPr></w:p>"
+            else:
+                # A last section with nothing in it still needs a paragraph to be a page.
+                body += ("<w:p/>" if k > 0 and bodies[k] == "" else bodies[k]) + sect_pr
 
         # Footnotes are registered as the body renders, above, so they are known here.
         self._has_settings = self._even_and_odd or bool(self._footnotes)
-
-        orient = ' w:orient="landscape"' if page["orientation"] == "landscape" else ""
-        body += (
-            "<w:sectPr>"
-            + references
-            + f'<w:pgSz w:w="{page["w"]}" w:h="{page["h"]}"{orient}/>'
-            f'<w:pgMar w:top="{page["top"]}" w:right="{page["right"]}" '
-            f'w:bottom="{page["bottom"]}" w:left="{page["left"]}" '
-            f'w:header="{page["header"]}" w:footer="{page["footer"]}" w:gutter="0"/>'
-            # CT_SectPr is a sequence: titlePg comes after pgMar (and PHP's
-            # pgBorders, which this port does not write).
-            + ("<w:titlePg/>" if self._title_pg else "")
-            + "</w:sectPr>"
-        )
 
         return (
             xml_declaration()
@@ -822,6 +823,81 @@ class DocxWriter:
             + "</w:body>"
             + "</w:document>"
         )
+
+    def _stretch_bands(self, stretch: dict[str, Any], k: int) -> dict[str, dict[str, str]]:
+        """One stretch's own header and footer parts, kind -> reference type -> rId, in
+        slot order, header before footer. PHP `stretchBands()`."""
+        page_spec = stretch["doc"].get("page")
+        page_spec = page_spec if isinstance(page_spec, dict) else {}
+        own: dict[str, dict[str, str]] = {}
+        for kind in ("header", "footer"):
+            for slot_type, n in _SLOT_NUMBERS.items():
+                key = kind if slot_type == "default" else slot_type + kind.capitalize()
+                name = self._band_part(
+                    k, kind, n, slot_type, page_spec.get(key), stretch["origins"].get(key, key), "default" in own.get(kind, {})
+                )
+                if name is not None:
+                    own.setdefault(kind, {})[slot_type] = f"rId{name.capitalize()}"
+        return own
+
+    def _band_part(self, k: int, kind: str, n: int, slot_type: str, spec: Any, origin: str, has_default: bool) -> str | None:
+        """The part a stretch's band slot is written to, or None when it asks for nothing.
+
+        The first stretch's are numbered by slot, as a document of one stretch has always
+        had them. A later stretch shares a part only with a stretch whose band was set in
+        the same place and whose text is the same width, because the part holds tab stops
+        at that width. A band with a `{section}` token shares with nothing: its cached
+        result is its number. PHP `bandPart()`.
+        """
+        at = f"{origin}|{self._content_width}" + (f"|{k}" if "{section}" in json.dumps(spec) else "")
+        if k > 0 and at in self._band_part_at:
+            return self._band_part_at[at]
+        name = f"{kind}{n if k == 0 else self._next_part[kind]}"
+        band = _band(spec)
+        xml = self._band_xml(kind, band) if band is not None else None
+        if xml is None:
+            if slot_type == "default" or not isinstance(spec, (dict, list)) or not has_default:
+                return None
+            if k > 0:
+                return self._blank_part_for(kind)
+            xml = _blank_band_xml(kind)
+        if k > 0:
+            self._next_part[kind] += 1
+        self._bands[name] = xml
+        self._band_part_at[at] = name
+        return name
+
+    def _blank_part_for(self, kind: str) -> str:
+        """The part a later stretch points at when it shows no band of this kind."""
+        if kind not in self._blank_part:
+            name = f"{kind}{self._next_part[kind]}"
+            self._next_part[kind] += 1
+            self._bands[name] = _blank_band_xml(kind)
+            self._blank_part[kind] = name
+        return self._blank_part[kind]
+
+    def _section_references(self, k: int, own: dict[str, dict[str, str]], title_pg: bool, seen: dict[str, set[str]]) -> str:
+        """One w:sectPr's header and footer references. With a switch on, a kind with no
+        part for those pages shows its default there. In a later section Word inherits any
+        reference it leaves out from the section before, so a band that stretch does not
+        show has to be blanked out loud. PHP `sectionReferences()`.
+        """
+        active = {"default": True, "first": title_pg, "even": self._even_and_odd}
+        references = ""
+        for kind in ("header", "footer"):
+            slots = dict(own.get(kind, {}))
+            if title_pg and "first" not in slots and "default" in slots:
+                slots["first"] = slots["default"]
+            if self._even_and_odd and "even" not in slots and "default" in slots:
+                slots["even"] = slots["default"]
+            for slot_type, on in active.items():
+                if k > 0 and on and slot_type not in slots and slot_type in seen.get(kind, set()):
+                    slots[slot_type] = f"rId{self._blank_part_for(kind).capitalize()}"
+            for slot_type in _SLOT_NUMBERS:
+                if slot_type in slots:
+                    references += f'<w:{kind}Reference w:type="{slot_type}" r:id="{slots[slot_type]}"/>'
+            seen.setdefault(kind, set()).update(slots)
+        return references
 
     def _band_xml(self, kind: str, band: dict[str, Any]) -> str:
         """One paragraph: left, TAB, centre, TAB, right (mirrors PHP DocxWriter::bandXml)."""
@@ -867,13 +943,15 @@ class DocxWriter:
 
         The cached result is the value when the writer knows it and nothing when
         it does not -- never a guess, and never the clock, which would make the
-        same document write different bytes: `1` for PAGE, NUMPAGES, SECTION and
-        SECTIONPAGES; the author and the title for AUTHOR and TITLE (empty
+        same document write different bytes: `1` for PAGE, NUMPAGES and SECTIONPAGES,
+        the section's number for SECTION; the author and the title for AUTHOR and TITLE (empty
         without one); no result run at all for DATE, TIME and FILENAME.
         """
         name = field["name"]
-        if name in ("page", "pages", "section", "sectionpages"):
+        if name in ("page", "pages", "sectionpages"):
             result = "1"
+        elif name == "section":
+            result = self._field_section
         elif name == "author":
             result = self._field_author
         elif name == "title":

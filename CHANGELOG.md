@@ -11,6 +11,26 @@ minor.
 
 ## [Unreleased]
 
+**What you must do: only if you read a `.docx` with more than one section, or wrote a page key straight on a break.** Otherwise a document writes exactly what it did, byte for byte, and reads what it did.
+
+### Added
+
+- **Mixed page orientation in `.docx`.** A `pageBreak` carrying `page` starts a new Word section: the vocabulary `fine-print` already has, with no new element and no `sections` key. `margins` merge side by side; every other key is replaced whole; `firstHeader` / `firstFooter` are never inherited; `page.background` on a break and `page` on a nested break are refused; `{"type": "pageBreak", "page": {}}` is valid. Each text width gets its own header and footer parts, because one-line bands hard-code tab stops; the first stretch keeps `header1`-`header3` and `footer1`-`footer3`, so a document without such a break writes the same bytes. Later parts number from 5.
+- `Schema.stretches()` and `Schema.is_page_object()`: the same reading of a document as `fine-print`'s.
+- `describe` says `Stretches: 3 (portrait, landscape, portrait)` for such a document.
+
+### Changed
+
+- **BREAKING: reading a multi-section file.** Top-level `page` is now the FIRST section (it was the last), and each later section is a `pageBreak` holding only what differs, instead of the blocks running together. **Consumer action:** if you relied on `page` being the last section, read it from the last break's `page`, or merge them with `Schema.stretches()`. A file with one section reads as before.
+- **BREAKING: `pageBreak.page` is no longer refused**, and repair keeps it: a document that was `ok: false` for that reason alone is now written. **Consumer action:** none, unless you relied on the refusal.
+- Repair moves a page key written straight on a break into `page`, with a note, as `fine-print` does; a background goes, also with a note, and a `page` on a nested break or one that is not an object is removed with a note. Those were `ok: false` before. Validation still refuses all of them by name, and a top-level `sections`.
+- Reading reports more through `unrepresented`, kind `layout-not-preserved`: `w:cols` above 1, a page-number restart and a paper size other than letter, legal or A4 are dropped, as they always were, and now say so, in a one-section file too. `oddPage` / `evenPage` starts read as a break and a report; `continuous` with the same size and orientation reads as no break and a report. **Consumer action:** none; if you treat any report as a failure, a custom paper size now is one.
+- `{section}` caches its section's number rather than 1 in each later section's part. Word computes it; LibreOffice shows the cached one.
+
+### Removed
+
+- The refusal `pageBreak.page is not implemented in last-word yet`, and the `/page` report counting flattened section breaks. **Consumer action:** none. `/page` still reports what the first section drops.
+
 ### Security
 
 - Every XML part of a file now goes through one gate (`archive/part_xml.py`), which

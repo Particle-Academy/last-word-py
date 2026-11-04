@@ -179,7 +179,8 @@ peers' (`.ai/knowledge/last-word-spec.md`, and `documents.md` §5.4 for 9–11):
 | `test_first_page_bands.py` | `page.firstHeader` / `firstFooter` / `evenHeader` / `evenFooter`: slot-numbered parts, `w:titlePg` / `w:evenAndOddHeaders`, read-back rules, case for case with PHP's `FirstPageBandsTest` less its template and `{blocks}` cases |
 | `test_band_fields.py` | header/footer field tokens, `Schema.split_field_tokens` / `field_token_of`, and `meta.author`, case for case with PHP's `BandFieldsTest` |
 | `test_bands_parity_php.py` | the same constructs part for part against the PHP writer, plus digests pinning that nothing written before 0.9.0 moved (PHP's own 0.15.0 goldens, which this port's 0.8.0 matched) |
-| `test_mixed_page_refusal.py` | `pageBreak.page`, its near-miss keys and top-level `sections` refused and kept through repair, and the `layout-not-preserved` report, case for case with PHP's `MixedPageRefusalTest`; `tests/data/formats/two-sections.*` is PHP's own read of a real two-section file |
+| `test_mixed_page_refusal.py` | near-miss keys on a break and top-level `sections` refused, case for case with PHP's `MixedPageRefusalTest` |
+| `test_mixed_pages.py` | `pageBreak.page`: the sections written, parts per text width, the read mapping and the fixpoint, case for case with PHP's `MixedPagesTest`, and every part byte-identical to the PHP writer; `tests/data/formats/two-sections.*` is PHP's own read of a real two-section file |
 | `test_page_geometry.py` | `page.margins.header` / `.footer` and `Schema.page_margins()`, case for case with PHP's `PageGeometryTest` |
 | `test_cross_read.py` | a frozen Node-written `.docx` read back |
 | `test_legacy_formats.py` | `.doc` / `.odt` / `.rtf` read as the `.docx` does, held to the PHP read (`tests/data/formats/report.read.json`) as JSON text; refusals by name; the hostile-input guards on files `tests/legacy_files.py` builds |

@@ -267,6 +267,7 @@ def _core_props(doc: dict[str, Any]) -> dict[str, Any] | None:
 
 
 EXTRACTORS = {
+    "sections": lambda doc: _sections(doc),
     "runProps": _run_props,
     "paragraphProps": lambda doc: [
         _norm_props(_child(p, "pPr")) for p in _collect(_document_xml(doc), "p")
@@ -293,8 +294,41 @@ class _NotApplicable(Exception):
     """A row whose INPUT asks for something this port has no API for."""
 
 
+def _sections(doc: dict[str, Any]) -> list[dict[str, Any]]:
+    """Every w:sectPr of document.xml in document order: its properties without its
+    header and footer references, and those as {kind, type, target, tabs}."""
+    parts = _written_parts(doc)
+    targets = _band_targets(parts)
+    root = ET.fromstring(parts["word/document.xml"])
+    out = []
+    for sect_pr in _collect(root, "sectPr"):
+        references = []
+        props = []
+        for node in list(sect_pr):
+            local = _local(node.tag)
+            attrs = {_local(k): v for k, v in node.attrib.items()}
+            if local in ("headerReference", "footerReference"):
+                target = targets.get(attrs["id"])
+                part = _part_root(parts.get(f"word/{target}"))
+                stops = _collect(part, "tabs") if part is not None else []
+                references.append(
+                    {
+                        "kind": "header" if local == "headerReference" else "footer",
+                        "type": attrs.get("type"),
+                        "target": target,
+                        "tabs": [{_local(k): v for k, v in t.attrib.items()}["pos"] for t in list(stops[0])] if stops else [],
+                    }
+                )
+            else:
+                props.append([local, attrs if attrs else True])
+        out.append({"props": props, "references": references})
+    return out
+
+
 def _extract(case: dict[str, Any]) -> Any:
     fn = case.get("fn")
+    if fn == "readFile":
+        return last_word.read(conformance.fixture_bytes(SUITE, case["input"]["file"]))
     if fn not in EXTRACTORS:
         raise RuntimeError(f'no extractor for fn "{fn}"')
     # Since 0.41.0 a row's input is {doc, template?, options?}. This port's
@@ -388,7 +422,7 @@ def test_compared_something_the_loop_is_not_empty() -> None:
     cases = conformance.cases(SUITE)
     assert len(cases) > 40
     for case in cases:
-        assert case.get("fn") in EXTRACTORS, f'row declares fn "{case.get("fn")}" with no extractor'
+        assert case.get("fn") in EXTRACTORS or case.get("fn") == "readFile", f'row declares fn "{case.get("fn")}" with no extractor'
 
 
 def test_the_extractors_discriminate() -> None:

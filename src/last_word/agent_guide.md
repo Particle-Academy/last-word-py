@@ -18,6 +18,8 @@ with the package's JSON schema (`Agent::jsonSchema()` / `Agent.jsonSchema()` / `
    every derived number, computed and checked before anything is written.
 2. Build the whole JSON in one go, following the recipes below.
 3. Check it: `Agent::validate` (PHP), `Agent.validate` (Node) or `validate` (Python) returns errors with a hint each.
+   In PHP, check the length too: `Agent::layout($doc)` returns the page count and the block
+   each page starts with, as the last-word-ui viewer draws them (PHP only for now).
 4. Write it (`Agent::write` / `Agent.toBytes` / `to_bytes`). If you can render the file and look at it, do,
    but repair only what you can see is wrong: one-shot "improvements" made
    blind regressed more documents than they fixed.
@@ -69,6 +71,15 @@ genre, lead with what the reader must know or decide, and analyse rather than re
   one too, and `firstFooter:{blocks:[]}` leaves page one without it. `evenHeader` /
   `evenFooter` do the same for even pages of a two-sided document. To keep a house
   letterhead template on page one only, write with the option `templateFirstPageOnly: true`.
+- Mixed page shapes, for a table too wide for portrait: `{type:"pageBreak",
+  page:{orientation:"landscape", margins:{left:28.8, right:28.8}}}`. The pages after it keep
+  those settings until another break names a change, so turn back with
+  `page:{orientation:"portrait"}`. `margins` merge side by side and every other key is
+  replaced whole. `firstHeader` / `firstFooter` are never inherited: on a break they mean the
+  first page after it. `page:{}` starts a new stretch with nothing changed. Only on a
+  top-level break, and never `background`. Header and footer tab stops follow each page's
+  width on their own. `{section}` counts the stretches and `{sectionpages}` is the page
+  count of the current one.
 - Header and footer text also takes `{date}`, `{date:d MMMM yyyy}`, `{time}`, `{author}`,
   `{title}`, `{filename}`, `{section}` and `{sectionpages}`: live Word fields, not typed
   values. `{title}` shows the document `title`; `{author}` shows `meta:{author:"..."}`. In
@@ -137,6 +148,13 @@ genre, lead with what the reader must know or decide, and analyse rather than re
   -> Headings name themes ("Growth is concentrated in EMEA"); the table holds the rows.
 - Page 1 dense, page 2 one-third empty. -> Estimate: a letter page at 11pt holds about
   45 lines of body text; balance sections across the pages the brief asks for.
+- "A two-page memo" that the reader sees as three pages. A word count is a poor
+  estimate: headings, lists, tables and a letterhead take room words do not show. ->
+  In PHP, measure it: `$l = Agent::layout($doc, $options)` (pass the same `template`
+  options you write with) gives `$l['pages']`, `$l['pageStarts']` (the block index each
+  page starts with) and `$l['pageList'][$i]['fill']` (0..1). Too long: tighten prose or
+  merge sections, then measure again. `$l['approximate']` lists anything only estimated
+  (a font other than Calibri, code, a date field); empty means exact.
 
 - A last page holding one stranded paragraph and a short section, 70% blank. ->
   Estimate the length first (about 45 lines of 11pt body per letter page, a table row

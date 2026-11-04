@@ -296,7 +296,7 @@ def _validate_meta(meta: Any, errors: list[dict[str, str]]) -> None:
         errors.append(_error("meta.title", 'the document title is the top-level "title", not meta.title'))
 
 
-def _validate_blocks_variant(band: dict, kind: str, errors: list[dict[str, str]]) -> None:
+def _validate_blocks_variant(band: dict, kind: str, errors: list[dict[str, str]], at: str = "page") -> None:
     """A first or even band in the `{blocks}` form.
 
     The mixing and list checks are PHP's `validateBlocksBand()`, message for
@@ -310,19 +310,19 @@ def _validate_blocks_variant(band: dict, kind: str, errors: list[dict[str, str]]
     if mixed:
         errors.append(
             _error(
-                f"page.{kind}",
+                f"{at}.{kind}",
                 f"page {kind} is either {{left, center, right, size, color}} or {{blocks}}, never both "
                 f"(found blocks with {', '.join(mixed)})",
             )
         )
     blocks = band["blocks"]
     if not is_list(blocks):
-        errors.append(_error(f"page.{kind}.blocks", f"page {kind} blocks must be a list of block objects"))
+        errors.append(_error(f"{at}.{kind}.blocks", f"page {kind} blocks must be a list of block objects"))
         return
     if blocks:
         errors.append(
             _error(
-                f"page.{kind}.blocks",
+                f"{at}.{kind}.blocks",
                 f"page {kind} with blocks is not supported by this port yet: write a one-line band "
                 f'({{left?, center?, right?}}), or {{"blocks": []}} for a blank page',
             )
@@ -363,53 +363,7 @@ class Validator:
                     _error("page", "page must be an object ({size?, orientation?, margins?})")
                 )
             else:
-                _check_enum(
-                    page.get("size"), "page.size", "page size", ("letter", "legal", "a4"), errors
-                )
-                _check_enum(
-                    page.get("orientation"),
-                    "page.orientation",
-                    "page orientation",
-                    ("portrait", "landscape"),
-                    errors,
-                )
-                _check_sides(page.get("margins"), "page.margins", "page margins", errors)
-                margins = page.get("margins")
-                for distance in ("header", "footer"):
-                    value = margins.get(distance) if isinstance(margins, dict) else None
-                    if value is not None and (
-                        not _is_number(value) or not math.isfinite(float(value)) or value < 0
-                    ):
-                        errors.append(
-                            _error(
-                                f"page.margins.{distance}",
-                                f"page margins {distance} is the distance from the page edge to the "
-                                f"{distance}: a number of points, 0 or more (36 by default)",
-                            )
-                        )
-                for kind in Schema.PAGE_BANDS:
-                    band = page.get(kind)
-                    if band is None:
-                        continue
-                    if not isinstance(band, (dict, list)):
-                        errors.append(
-                            _error(f"page.{kind}", f"page {kind} must be an object ({{left?, center?, right?, size?, color?}})")
-                        )
-                        continue
-                    if isinstance(band, list):
-                        continue
-                    if kind not in ("header", "footer") and "blocks" in band:
-                        _validate_blocks_variant(band, kind, errors)
-                        continue
-                    for slot in ("left", "center", "right"):
-                        if band.get(slot) is not None and not isinstance(band[slot], str):
-                            errors.append(_error(f"page.{kind}.{slot}", f"page {kind} {slot} must be text"))
-                    size = band.get("size")
-                    if size is not None and (not is_numeric(size) or php_float(size) <= 0):
-                        errors.append(_error(f"page.{kind}.size", f"page {kind} size must be a positive number of points"))
-                    color = band.get("color")
-                    if color is not None and not (isinstance(color, str) and _HEX_BAND_RE.match(color)):
-                        errors.append(_error(f"page.{kind}.color", f"page {kind} color must be #RRGGBB"))
+                self._validate_page(page, "page", errors)
 
         if "title" in doc and not isinstance(doc["title"], str):
             errors.append(_error("title", "title must be a string when present"))
@@ -429,6 +383,44 @@ class Validator:
         self._validate_blocks(doc["blocks"], "blocks", errors)
 
         return errors
+
+    def _validate_page(self, page: dict[str, Any], at: str, errors: list[dict[str, str]]) -> None:
+        """A page object, wherever it sits: the document's or a break's."""
+        _check_enum(page.get("size"), f"{at}.size", "page size", ("letter", "legal", "a4"), errors)
+        _check_enum(page.get("orientation"), f"{at}.orientation", "page orientation", ("portrait", "landscape"), errors)
+        _check_sides(page.get("margins"), f"{at}.margins", "page margins", errors)
+        margins = page.get("margins")
+        for distance in ("header", "footer"):
+            value = margins.get(distance) if isinstance(margins, dict) else None
+            if value is not None and (not _is_number(value) or not math.isfinite(float(value)) or value < 0):
+                errors.append(
+                    _error(
+                        f"{at}.margins.{distance}",
+                        f"page margins {distance} is the distance from the page edge to the "
+                        f"{distance}: a number of points, 0 or more (36 by default)",
+                    )
+                )
+        for kind in Schema.PAGE_BANDS:
+            band = page.get(kind)
+            if band is None:
+                continue
+            if not isinstance(band, (dict, list)):
+                errors.append(_error(f"{at}.{kind}", f"page {kind} must be an object ({{left?, center?, right?, size?, color?}})"))
+                continue
+            if isinstance(band, list):
+                continue
+            if kind not in ("header", "footer") and "blocks" in band:
+                _validate_blocks_variant(band, kind, errors, at)
+                continue
+            for slot in ("left", "center", "right"):
+                if band.get(slot) is not None and not isinstance(band[slot], str):
+                    errors.append(_error(f"{at}.{kind}.{slot}", f"page {kind} {slot} must be text"))
+            size = band.get("size")
+            if size is not None and (not is_numeric(size) or php_float(size) <= 0):
+                errors.append(_error(f"{at}.{kind}.size", f"page {kind} size must be a positive number of points"))
+            color = band.get("color")
+            if color is not None and not (isinstance(color, str) and _HEX_BAND_RE.match(color)):
+                errors.append(_error(f"{at}.{kind}.color", f"page {kind} color must be #RRGGBB"))
 
     # ─── Blocks ──────────────────────────────────────────────────────────
 
@@ -475,27 +467,46 @@ class Validator:
             self._validate_page_break(block, path, errors)
         # hr carries nothing to check.
 
-    @staticmethod
-    def _validate_page_break(block: dict, path: str, errors: list[dict[str, str]]) -> None:
-        """A break asking for a different page. A .docx has one page setup until the
-        writer implements `page`, so it is refused rather than ignored: a document
-        that silently comes out all portrait looks fine. Repair leaves these keys in
-        place, so `validate_and_repair` stays `ok: False`. Mirrors PHP
-        `Validator::validatePageBreak()`, messages and paths verbatim.
+    def _validate_page_break(self, block: dict, path: str, errors: list[dict[str, str]]) -> None:
+        """A page break, and what it may carry. A page key sitting on the break itself is
+        a near-miss: ignored, the agent would think it had turned the page. `page` is a
+        page object, on a top-level break, with no background: Word has one page colour
+        per document. Mirrors PHP `Validator::validatePageBreak()`, messages and paths
+        verbatim.
         """
-        if "page" in block:
+        for key in Schema.PAGE_BREAK_NEAR_MISS_KEYS:
+            if key in block:
+                errors.append(_error(f"{path}.{key}", f"a pageBreak has no {key} key; use pageBreak.page"))
+        page = block.get("page")
+        if page is None:
+            return
+        if not Schema.is_page_object(page):
             errors.append(
                 _error(
                     f"{path}.page",
-                    "pageBreak.page is not implemented in last-word yet; remove page to keep "
-                    "one page setup, or write this document as a PDF with fine-print",
+                    "page on a break must be an object of page settings, {} for a new stretch with nothing changed",
                 )
             )
-        for key in Schema.PAGE_BREAK_NEAR_MISS_KEYS:
-            if key in block:
-                errors.append(
-                    _error(f"{path}.{key}", f"a pageBreak has no {key} key; use pageBreak.page")
+            return
+        if re.fullmatch(r"blocks\[\d+\]", path) is None:
+            errors.append(
+                _error(
+                    f"{path}.page",
+                    "page settings go on a top-level page break; a break nested in a quote or a "
+                    "table cell cannot change the page",
                 )
+            )
+            return
+        if not isinstance(page, dict):
+            return
+        if "background" in page:
+            errors.append(
+                _error(
+                    f"{path}.page.background",
+                    "a document has one page colour: set background on the top-level page, not on a break",
+                )
+            )
+        self._validate_page(page, f"{path}.page", errors)
 
     def _validate_heading(self, block: dict, path: str, errors: list[dict[str, str]]) -> None:
         level: Any = block.get("level")

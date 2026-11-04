@@ -365,9 +365,17 @@ class DocxReader:
         # pre-0.2.0 legacy slot -- the first top-level Title-styled paragraph --
         # is consumed instead (see _parse_block_container).
         self._title = self._parse_core_title()
-        self._content_width = _content_width_of(
-            _first_child_by_name(body, "sectPr") if body is not None else None
-        )
+        # Top-level `page` is the first section, and every later one a break holding
+        # what differs from the page before it.
+        sections, dropped = _sections_of(self, body) if body is not None else ([None], 0)
+        self._section_plan = []
+        self._section_cursor = 0
+        self._section_targets = {}
+        self._notes = []
+        self._content_width = _content_width_of(sections[0])
+        page = self._page_of(sections[0])
+        self._plan_sections(sections, page or {})
+        dropped += _dropped_by_first_section(sections[0])
         blocks = self._parse_block_container(body, True) if body is not None else []
 
         doc: dict[str, Any] = {}
@@ -382,25 +390,75 @@ class DocxReader:
         # differ from what the writer produces unasked, for the same reason
         # table options are: a Letter portrait page at one-inch margins is what
         # every document written before `page` existed contains.
-        sect_pr = _first_child_by_name(body, "sectPr") if body is not None else None
-        page = _parse_page(sect_pr)
-        if sect_pr is not None:
-            for key, band in self._parse_bands(sect_pr).items():
-                page = page or {}
-                page[key] = band
         if page is not None:
             doc["page"] = page
         doc.update(self._parse_doc_defaults())
 
         doc["blocks"] = blocks
         # Never document text: locations and counts only, like the exchange report.
-        breaks = _section_breaks(body) if body is not None else 0
-        if breaks > 0:
-            doc["unrepresented"] = [{"where": "/page", "kind": "layout-not-preserved", "count": breaks}]
+        notes = list(self._notes)
+        if dropped > 0:
+            notes.append({"where": "/page", "kind": "layout-not-preserved", "count": dropped})
+        if notes:
+            doc["unrepresented"] = notes
         # A .dotx reads exactly like its .docx twin, and says so.
         if self._source_kind == office_template.TEMPLATE:
             doc["sourceKind"] = office_template.TEMPLATE
         return doc
+
+    def _page_of(self, sect_pr: ET.Element | None) -> dict[str, Any] | None:
+        """A section as a page object: its geometry and, through what it inherits, its bands."""
+        page = _parse_page(sect_pr)
+        if sect_pr is not None:
+            for key, band in self._parse_bands(sect_pr).items():
+                page = page or {}
+                page[key] = band
+        return page
+
+    def _plan_sections(self, sections: list[ET.Element | None], first: dict[str, Any]) -> None:
+        """What ending each section does to the blocks. `w:type` says how a section
+        STARTS, so the break between sections k-1 and k is decided by section k's type;
+        absent is nextPage. A continuous section that does not break leaves the model's
+        page as it was. Mirrors PHP `DocxReader::planSections()`.
+        """
+        current = first
+        for sect_pr in sections[1:]:
+            following = self._page_of(sect_pr) or {}
+            known_paper = _paper_known(sect_pr)
+            change = _page_change(current, following, known_paper)
+            reshaped = "orientation" in change or "size" in change
+            type_el = _first_child_by_name(sect_pr, "type") if sect_pr is not None else None
+            section_type = _w_attr(type_el, "val") if type_el is not None else None
+            breaks = section_type != "continuous" or reshaped
+
+            dropped = 0
+            if not breaks:
+                dropped += 1
+            else:
+                dropped += 0 if section_type in (None, "nextPage", "continuous") else 1
+                dropped += 1 if _columns(sect_pr) > 1 else 0
+                if not known_paper:
+                    following = {key: value for key, value in following.items() if key != "size"}
+                    if "size" in current:
+                        following["size"] = current["size"]
+                current = following
+            dropped += 1 if _restarts(sect_pr, True) else 0
+            dropped += 0 if known_paper else 1
+            self._section_plan.append(
+                {"break": change if breaks else None, "width": _content_width_of(sect_pr), "dropped": dropped}
+            )
+
+    def _end_section(self, blocks: list[dict[str, Any]]) -> None:
+        """The section the top-level walk has just passed the end of."""
+        if self._section_cursor >= len(self._section_plan):
+            return
+        plan = self._section_plan[self._section_cursor]
+        self._section_cursor += 1
+        self._content_width = plan["width"]
+        if plan["dropped"] > 0:
+            self._notes.append({"where": f"/blocks/{len(blocks)}", "kind": "layout-not-preserved", "count": plan["dropped"]})
+        if plan["break"] is not None:
+            blocks.append({"type": "pageBreak", "page": plan["break"]})
 
     def _parse_bands(self, sect_pr: ET.Element) -> dict[str, dict[str, Any]]:
         """The section's headers and footers, by model key, in `Schema.PAGE_BANDS` order.
@@ -416,9 +474,15 @@ class DocxReader:
         """
         title_pg_el = _first_child_by_name(sect_pr, "titlePg")
         title_pg = title_pg_el is not None and _toggle_on(_w_attr(title_pg_el, "val"))
+        # A reference a section leaves out is inherited from the section before.
+        for kind in ("header", "footer"):
+            for ref_type in ("default", "first", "even"):
+                own_target = self._band_target(sect_pr, kind, ref_type)
+                if own_target is not None:
+                    self._section_targets.setdefault(kind, {})[ref_type] = own_target
         found: dict[str, dict[str, Any]] = {}
         for kind in ("header", "footer"):
-            default = self._band_target(sect_pr, kind, "default")
+            default = self._section_targets.get(kind, {}).get("default")
             band = self._parse_band_part(default) if default is not None else None
             if band is not None:
                 found[kind] = band
@@ -426,7 +490,7 @@ class DocxReader:
                 if not on:
                     continue
                 key = variant_type + kind.capitalize()
-                target = self._band_target(sect_pr, kind, variant_type)
+                target = self._section_targets.get(kind, {}).get(variant_type)
                 if target is not None and target == default:
                     continue
                 variant = self._parse_band_part(target) if target is not None else None
@@ -786,7 +850,18 @@ class DocxReader:
             flush_code()
             flush_quote()
 
+        section_ended = False
         for node in self._block_children(container):
+            if section_ended:
+                flush_all()
+                self._end_section(blocks)
+                section_ended = False
+            if (
+                top_level
+                and _local(node.tag) == "p"
+                and _first_child_by_name(_first_child_by_name(node, "pPr"), "sectPr") is not None
+            ):
+                section_ended = True  # after this paragraph, whatever it turns out to hold
             name = _local(node.tag)
             if name == "tbl":
                 flush_all()
@@ -881,6 +956,8 @@ class DocxReader:
                 blocks.append({"type": "pageBreak"})
 
         flush_all()
+        if section_ended:
+            self._end_section(blocks)
 
         return blocks
 
@@ -1438,30 +1515,104 @@ class DocxReader:
         return block
 
 
-def _section_breaks(body: ET.Element) -> int:
-    """How many section breaks the body holds: paragraphs whose `w:pPr` carries a
-    `w:sectPr`, in the wrappers `_block_children` descends into.
+def _sections_of(reader: DocxReader, body: ET.Element) -> tuple[list[ET.Element | None], int]:
+    """The body's sections in order, each by the `w:sectPr` describing it, the body's
+    own last; and how many sit inside a code or quote block, which are not read.
+    PHP `DocxReader::sections()`."""
+    sections: list[ET.Element | None] = []
+    nested = 0
+    for node in reader._block_children(body):
+        local = _local(node.tag)
+        if local == "p":
+            sect_pr = _first_child_by_name(_first_child_by_name(node, "pPr"), "sectPr")
+            if sect_pr is not None:
+                sections.append(sect_pr)
+        elif local == "sdt":
+            content = _first_child_by_name(node, "sdtContent")
+            nested += _sections_in(content) if content is not None else 0
+    sections.append(_first_child_by_name(body, "sectPr"))
+    return sections, nested
 
-    The model has one page setup, so `page` is the last section's and every other
-    section is lost; a count of them is reported instead of the loss going unsaid.
-    The body's own final `w:sectPr` is not a break. A walk, not a recursion: this
-    nesting is attacker-supplied. Mirrors PHP `DocxReader::sectionBreaks()`.
-    """
+
+def _sections_in(root: ET.Element) -> int:
+    """Section breaks at any block level under a node. A walk: this nesting is attacker-supplied."""
     count = 0
-    stack = [body]
+    stack = [root]
     while stack:
         for node in list(stack.pop()):
-            name = _local(node.tag)
-            if name == "p":
+            local = _local(node.tag)
+            if local == "p":
                 if _first_child_by_name(_first_child_by_name(node, "pPr"), "sectPr") is not None:
                     count += 1
-            elif name == "customXml":
+            elif local == "customXml":
                 stack.append(node)
-            elif name == "sdt":
+            elif local == "sdt":
                 content = _first_child_by_name(node, "sdtContent")
                 if content is not None:
                     stack.append(content)
     return count
+
+
+def _page_change(before: dict[str, Any], after: dict[str, Any], known_paper: bool) -> dict[str, Any]:
+    """What a section changes from the page before it. PHP `pageChange()`: a side is
+    compared with defaults filled in; a band a section no longer shows is
+    `{"blocks": []}`; the first-page bands are never inherited, so never compared."""
+    out: dict[str, Any] = {}
+    if before.get("orientation", "portrait") != after.get("orientation", "portrait"):
+        out["orientation"] = after.get("orientation", "portrait")
+    if known_paper and before.get("size", "letter") != after.get("size", "letter"):
+        out["size"] = after.get("size", "letter")
+    margins: dict[str, Any] = {}
+    was = before.get("margins", {})
+    now = after.get("margins", {})
+    for side in (*BOX_EDGES, "header", "footer"):
+        default = 36 if side in ("header", "footer") else 72
+        value = now.get(side, default)
+        if float(was.get(side, default)) != float(value):
+            margins[side] = value
+    if margins:
+        out["margins"] = margins
+    for key in Schema.PAGE_BANDS:
+        previous = None if key in ("firstHeader", "firstFooter") else before.get(key)
+        band = after.get(key)
+        if band is not None and band != previous:
+            out[key] = band
+        elif band is None and previous is not None and previous.get("blocks") != []:
+            out[key] = {"blocks": []}
+    return out
+
+
+def _dropped_by_first_section(sect_pr: ET.Element | None) -> int:
+    """What the first section asks for that the model cannot hold."""
+    return (1 if _columns(sect_pr) > 1 else 0) + (1 if _restarts(sect_pr, False) else 0) + (0 if _paper_known(sect_pr) else 1)
+
+
+def _columns(sect_pr: ET.Element | None) -> int:
+    """`w:cols w:num`, 1 when absent."""
+    cols = _first_child_by_name(sect_pr, "cols") if sect_pr is not None else None
+    num = _w_attr(cols, "num") if cols is not None else None
+    return int(php_float(num)) if is_numeric(num) else 1
+
+
+def _restarts(sect_pr: ET.Element | None, later: bool) -> bool:
+    """`w:pgNumType w:start`: a first section starting at 1 changes nothing; any later start is a restart."""
+    num_type = _first_child_by_name(sect_pr, "pgNumType") if sect_pr is not None else None
+    start = _w_attr(num_type, "start") if num_type is not None else None
+    return is_numeric(start) and (later or int(php_float(start)) != 1)
+
+
+def _paper_known(sect_pr: ET.Element | None) -> bool:
+    """Whether the section's paper is one the model names. No `w:pgSz` is the default, so it is."""
+    pg_sz = _first_child_by_name(sect_pr, "pgSz") if sect_pr is not None else None
+    if pg_sz is None:
+        return True
+    raw_w = _w_attr(pg_sz, "w")
+    raw_h = _w_attr(pg_sz, "h")
+    width = int(php_float(raw_w)) if is_numeric(raw_w) else 12240
+    height = int(php_float(raw_h)) if is_numeric(raw_h) else 15840
+    if _w_attr(pg_sz, "orient") == "landscape":
+        width, height = height, width
+    return any(pw == width and ph == height for pw, ph in PAGE_SIZES.values())
 
 
 def _content_width_of(sect_pr: ET.Element | None) -> int:

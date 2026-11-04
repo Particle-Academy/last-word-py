@@ -279,25 +279,32 @@ def describe(doc: dict[str, Any]) -> str:
 
     words = _count_words(doc)
 
-    lines = [f"Document: {title}", f"Blocks: {len(blocks)}"]
+    lines = [f"Document: {title}"]
+    # A document whose page setup changes partway, as fine-print's describe() says it.
+    stretches = Schema.stretches({**doc, "blocks": blocks})
+    if len(stretches) > 1:
+        shapes = ["landscape" if (s["doc"].get("page") or {}).get("orientation") == "landscape" else "portrait" for s in stretches]
+        lines.append(f"Stretches: {len(stretches)} ({', '.join(shapes)})")
+    lines.append(f"Blocks: {len(blocks)}")
     if counts:
         lines.append("Block types: " + ", ".join(f"{n} {t}" for t, n in counts.items()))
     lines.append(f"Words: {words}")
 
     # What read() flattened, in PHP's words.
     raw_notes = doc.get("unrepresented")
-    section_breaks = 0
+    section_notes = 0
     for note in raw_notes if isinstance(raw_notes, list) else []:
         if (
             isinstance(note, dict)
             and note.get("kind") == "layout-not-preserved"
             and isinstance(note.get("count"), int)
         ):
-            section_breaks += note["count"]
-    if section_breaks > 0:
+            section_notes += note["count"]
+    if section_notes > 0:
         lines.append(
-            f"Layout not preserved: {section_breaks} section break"
-            f"{'' if section_breaks == 1 else 's'} flattened into the last section's page setup"
+            f"Layout not preserved: {section_notes} section setting"
+            f"{'' if section_notes == 1 else 's'} dropped (columns, odd or even starts, continuous "
+            "breaks, page-number restarts, unknown paper)"
         )
 
     return "\n".join(lines)

@@ -185,14 +185,22 @@ to apply to here.
 
 ## One page setup, for now
 
-A file with section breaks reads with the last section's page and the rest
-flattened into it, and says so: `"unrepresented": [{"where": "/page", "kind":
-"layout-not-preserved", "count": 1}]`, where `count` is the section breaks lost.
-On the way in, `pageBreak.page` is refused until a later release writes it,
-`validate_and_repair` included: repair leaves it in place and the result is
-`ok: False`. The same goes for page keys written straight on a break
-(`pageBreak.orientation`, `.margins`, ...) and for a top-level `sections`, neither
-of which exists. `fine-print` honours `pageBreak.page` for PDFs today.
+**Mixed pages.** A `pageBreak` carrying `page` changes the page from there on:
+`{"type": "pageBreak", "page": {"orientation": "landscape", "margins": {"left": 28.8, "right": 28.8}}}`.
+It is `fine-print`'s vocabulary, and there is no `sections` key. `margins` merge side
+by side and every other key is replaced whole; `firstHeader` / `firstFooter` are never
+inherited; `{"type": "pageBreak", "page": {}}` starts a new stretch with nothing changed.
+`page.background` on a break, `page` on a break in a quote or a table cell, page keys
+straight on a break and a top-level `sections` are refused; repair moves page keys into
+`page`, with a note. In the file each stretch is a Word section.
+
+Reading works the other way round: top-level `page` is the FIRST section, and each later
+one a break holding only what differs from the page before it. `oddPage` / `evenPage` read
+as a break and a report, `continuous` with the same size and orientation as no break and a
+report, `continuous` with another size or orientation as a break. `w:cols` above 1, a
+page-number restart and a paper other than letter, legal or A4 are dropped and reported:
+`"unrepresented": [{"where": "/blocks/2", "kind": "layout-not-preserved", "count": 1}]`, at
+`/page` for the first section.
 
 ## Reading .doc, .odt and .rtf
 

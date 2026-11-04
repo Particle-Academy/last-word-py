@@ -20,6 +20,7 @@ caller reuses the document.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from ..helpers.php import (
@@ -155,13 +156,39 @@ class Repairer:
         if block_type == "chart":
             return self._repair_chart(block, path)
         if block_type == "pageBreak":
-            # Rewritten to the bare break, EXCEPT what validation refuses on one:
-            # `page` and the near-miss keys stay, so the document stays `ok: False`.
-            # Stripped, any unrelated repair elsewhere would turn a refused landscape
-            # section into `ok: True` and an all-portrait document.
-            kept = ("page", *Schema.PAGE_BREAK_NEAR_MISS_KEYS)
-            return {"type": "pageBreak", **{key: block[key] for key in kept if key in block}}
+            return self._repair_page_break(block, path)
         return {"type": "hr"}
+
+    def _repair_page_break(self, block: dict[str, Any], path: str) -> dict[str, Any]:
+        """A page break. `page` stays, and page keys typed on the break itself move into
+        it, each with a note: rewriting a break to the bare break would silently undo an
+        orientation change and still report success. A background goes, also with a note.
+        Anything else on the break is dropped, as it always was. PHP `repairPageBreak()`.
+        """
+        page = block.get("page")
+        moved: dict[str, Any] = {}
+        for key in Schema.PAGE_BREAK_NEAR_MISS_KEYS:
+            if key not in block:
+                continue
+            if isinstance(page, dict) and key in page:
+                self._note(f"{path}.{key}", f"dropped {key} from the break: its page already says what it is")
+                continue
+            moved[key] = block[key]
+            self._note(f"{path}.{key}", f'moved {key} into the break\'s "page": a break\'s page settings go there')
+        if moved:
+            page = {**page, **moved} if isinstance(page, dict) else moved
+        if page is None:
+            return {"type": "pageBreak"}
+        if not Schema.is_page_object(page):
+            self._note(f"{path}.page", "removed: page on a break must be an object of page settings, {} for a new stretch with nothing changed")
+            return {"type": "pageBreak"}
+        if re.fullmatch(r"blocks\[\d+\]", path) is None:
+            self._note(f"{path}.page", "removed: page settings go on a top-level page break; a break nested in a quote or a table cell cannot change the page")
+            return {"type": "pageBreak"}
+        if isinstance(page, dict) and "background" in page:
+            page = {key: value for key, value in page.items() if key != "background"}
+            self._note(f"{path}.page.background", "removed background from the break: a document has one page colour")
+        return {"type": "pageBreak", "page": page}
 
     def _repair_heading(self, block: dict[str, Any], path: str) -> dict[str, Any]:
         level = block.get("level", 1)

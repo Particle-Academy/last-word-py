@@ -371,6 +371,56 @@ class Schema:
 
         block_ref: dict[str, Any] = {"$ref": "#/$defs/block"}
 
+        page_props: dict[str, Any] = {
+                        "size": {"enum": list(Schema.PAGE_SIZES)},
+                        "orientation": {"enum": ["portrait", "landscape"]},
+                        "margins": {"$ref": "#/$defs/pageMargins"},
+                        "header": {
+                            "$ref": "#/$defs/band",
+                            "description": (
+                                "A running header on every page. With a firstHeader, every page but "
+                                "the first; with an evenHeader, the odd pages."
+                            ),
+                        },
+                        "footer": {
+                            "$ref": "#/$defs/band",
+                            "description": (
+                                "A running footer on every page -- where a multi-page document "
+                                "carries its page numbers. With a firstFooter, every page but the "
+                                "first; with an evenFooter, the odd pages."
+                            ),
+                        },
+                        "firstHeader": {
+                            "oneOf": [{"$ref": "#/$defs/band"}, {"$ref": "#/$defs/emptyBand"}],
+                            "description": (
+                                "The header of the FIRST page only, in place of header there (Word's "
+                                '"Different first page"). {"blocks": []} leaves page one with no '
+                                "header when header is set."
+                            ),
+                        },
+                        "firstFooter": {
+                            "oneOf": [{"$ref": "#/$defs/band"}, {"$ref": "#/$defs/emptyBand"}],
+                            "description": (
+                                "The footer of the first page only, in place of footer there. Without "
+                                'it the footer is on the first page too. {"blocks": []} leaves page '
+                                "one with no footer when footer is set."
+                            ),
+                        },
+                        "evenHeader": {
+                            "oneOf": [{"$ref": "#/$defs/band"}, {"$ref": "#/$defs/emptyBand"}],
+                            "description": (
+                                "The header of even pages (Word's 'Different odd and even pages'); "
+                                "header is then the odd pages'. For a bound, two-sided document."
+                            ),
+                        },
+                        "evenFooter": {
+                            "oneOf": [{"$ref": "#/$defs/band"}, {"$ref": "#/$defs/emptyBand"}],
+                            "description": (
+                                "The footer of even pages; footer is then the odd pages'. Without it "
+                                "the footer is on even pages too."
+                            ),
+                        },
+                    }
         blocks: dict[str, Any] = {
             "heading": {
                 "type": "object",
@@ -552,7 +602,23 @@ class Schema:
             "pageBreak": {
                 "type": "object",
                 "required": ["type"],
-                "properties": {"type": {"const": "pageBreak"}},
+                "properties": {
+                    "type": {"const": "pageBreak"},
+                    "page": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "description": (
+                            'Change the page from here on: {"type": "pageBreak", "page": {"orientation": '
+                            '"landscape", "margins": {"left": 28.8, "right": 28.8}}}. Pages after the break keep '
+                            "every setting until another break names a change; portrait does not come back by "
+                            "itself. margins merge side by side, every other key is replaced whole. firstHeader "
+                            "and firstFooter are never inherited: here they mean the first page after this "
+                            "break. {} starts a new stretch with nothing changed. Only on a top-level break, not "
+                            "one in a quote or a table cell. Word: a section break."
+                        ),
+                        "properties": {k: v for k, v in page_props.items() if k != "background"},
+                    },
+                },
             },
             "hr": {
                 "type": "object",
@@ -601,56 +667,7 @@ class Schema:
                         "Section geometry. A one-page business document does not fit "
                         "inside the default one-inch margins."
                     ),
-                    "properties": {
-                        "size": {"enum": list(Schema.PAGE_SIZES)},
-                        "orientation": {"enum": ["portrait", "landscape"]},
-                        "margins": {"$ref": "#/$defs/pageMargins"},
-                        "header": {
-                            "$ref": "#/$defs/band",
-                            "description": (
-                                "A running header on every page. With a firstHeader, every page but "
-                                "the first; with an evenHeader, the odd pages."
-                            ),
-                        },
-                        "footer": {
-                            "$ref": "#/$defs/band",
-                            "description": (
-                                "A running footer on every page -- where a multi-page document "
-                                "carries its page numbers. With a firstFooter, every page but the "
-                                "first; with an evenFooter, the odd pages."
-                            ),
-                        },
-                        "firstHeader": {
-                            "oneOf": [{"$ref": "#/$defs/band"}, {"$ref": "#/$defs/emptyBand"}],
-                            "description": (
-                                "The header of the FIRST page only, in place of header there (Word's "
-                                '"Different first page"). {"blocks": []} leaves page one with no '
-                                "header when header is set."
-                            ),
-                        },
-                        "firstFooter": {
-                            "oneOf": [{"$ref": "#/$defs/band"}, {"$ref": "#/$defs/emptyBand"}],
-                            "description": (
-                                "The footer of the first page only, in place of footer there. Without "
-                                'it the footer is on the first page too. {"blocks": []} leaves page '
-                                "one with no footer when footer is set."
-                            ),
-                        },
-                        "evenHeader": {
-                            "oneOf": [{"$ref": "#/$defs/band"}, {"$ref": "#/$defs/emptyBand"}],
-                            "description": (
-                                "The header of even pages (Word's 'Different odd and even pages'); "
-                                "header is then the odd pages'. For a bound, two-sided document."
-                            ),
-                        },
-                        "evenFooter": {
-                            "oneOf": [{"$ref": "#/$defs/band"}, {"$ref": "#/$defs/emptyBand"}],
-                            "description": (
-                                "The footer of even pages; footer is then the odd pages'. Without it "
-                                "the footer is on even pages too."
-                            ),
-                        },
-                    },
+                    "properties": page_props,
                 },
                 "defaultFont": {
                     "type": "string",
@@ -742,6 +759,70 @@ class Schema:
                 "block": {"oneOf": list(blocks.values())},
             },
         }
+
+    @staticmethod
+    def is_page_object(page: Any) -> bool:
+        """Whether a break's `page` is a page object: `{}`, which PHP decodes to `[]`, is one."""
+        return isinstance(page, dict) or (isinstance(page, list) and not page)
+
+    @staticmethod
+    def stretches(doc: dict[str, Any]) -> list[dict[str, Any]]:
+        """The document's runs of pages of one setup, in order: what is before the
+        first `pageBreak` carrying a `page`, then what follows each one. Word calls
+        each a section. A plain break, or one nested in a quote or a table cell, starts
+        no stretch. Mirrors PHP `Schema::stretches()`.
+
+        Each has `doc` (the document as that stretch sees it: `page` merged, no
+        `blocks`), `blocks` (keyed by their index in the document), `break` (the index
+        of the break that starts it, None for the first) and `origins`: a band key ->
+        where it was set, so two stretches holding the same band can be told from two
+        that were merely given equal ones.
+        """
+        raw = doc.get("blocks")
+        blocks = raw if isinstance(raw, list) else []
+        page = doc.get("page") if isinstance(doc.get("page"), dict) else None
+        origins = {key: f"page.{key}" for key in Schema.PAGE_BANDS}
+
+        def stretch(current: dict[int, Any], at: int | None) -> dict[str, Any]:
+            view = {key: value for key, value in doc.items() if key != "blocks"}
+            if page is not None:
+                view["page"] = page
+            return {"doc": view, "blocks": current, "break": at, "origins": dict(origins)}
+
+        out: list[dict[str, Any]] = []
+        current: dict[int, Any] = {}
+        at: int | None = None
+        for i, block in enumerate(blocks):
+            if not (isinstance(block, dict) and block.get("type") == "pageBreak" and Schema.is_page_object(block.get("page"))):
+                current[i] = block
+                continue
+            out.append(stretch(current, at))
+            current = {}
+            at = i
+            origins.pop("firstHeader", None)
+            origins.pop("firstFooter", None)
+            change = block["page"] if isinstance(block["page"], dict) else {}
+            page = Schema._merge_page(page or {}, change)
+            for key in Schema.PAGE_BANDS:
+                if change.get(key) is not None:
+                    origins[key] = f"blocks[{i}].page.{key}"
+        out.append(stretch(current, at))
+        return out
+
+    @staticmethod
+    def _merge_page(page: dict[str, Any], change: dict[str, Any]) -> dict[str, Any]:
+        """A break's `page` over the page before it: margins side by side, every other
+        key replaced whole, the first-page bands never carried over. A background has no
+        place on a break (validation refuses it) and is ignored here."""
+        out = {key: value for key, value in page.items() if key not in ("firstHeader", "firstFooter")}
+        for key, value in change.items():
+            if value is None or key == "background":
+                continue
+            if key == "margins" and isinstance(value, dict) and isinstance(out.get("margins"), dict):
+                out["margins"] = {**out["margins"], **{k: v for k, v in value.items() if v is not None}}
+                continue
+            out[key] = value
+        return out
 
     @staticmethod
     def page_margins(doc: Any) -> dict[str, float]:

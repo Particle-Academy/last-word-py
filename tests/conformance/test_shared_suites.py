@@ -262,6 +262,7 @@ def _lw_schema_def(schema: dict, name: str) -> dict:
         "page": schema["properties"]["page"],
         "pageBorder": schema["properties"]["page"]["properties"].get("border", {"properties": {}}),
         "band": schema["$defs"]["band"],
+        "pageMargins": schema["$defs"]["pageMargins"],
         "run": schema["$defs"]["run"],
         "paragraph": blocks["paragraph"],
         "heading": blocks["heading"],
@@ -354,7 +355,11 @@ def test_satisfies_the_last_word_half_of_page_refusal(capsys: pytest.CaptureFixt
     failed: dict[str, str] = {}
     for case in cases:
         doc, want = case["input"]["doc"], case["expected"]["lastWord"]
-        got: dict = {"repairOk": validate_and_repair(doc)["ok"]}
+        repaired = validate_and_repair(doc)
+        got: dict = {"repairOk": repaired["ok"]}
+        if "pageKept" in want:
+            kept = lambda blocks: sum(1 for b in blocks if b.get("type") == "pageBreak" and "page" in b)  # noqa: E731
+            got["pageKept"] = kept(repaired["schema"]["blocks"]) == kept(doc["blocks"])
         if "messages" in want:
             got["messages"] = [e["message"] for e in validate(doc)]
         if not loader.equals(got, want):

@@ -10,7 +10,7 @@ import hashlib
 
 from last_word import guide
 
-AGENT_GUIDE_SHA256 = "6d70d774cf630c0c40813d70ddd00191cc8a0b57a2cd3c603cae54f64a9501fa"
+AGENT_GUIDE_SHA256 = "5f897d2a73063379598a31aad83aea7935c84ffc4a23026d8ffaf3e5034aa31a"
 
 
 def test_returns_the_guide_and_it_is_the_shared_one() -> None:
