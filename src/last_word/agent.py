@@ -284,6 +284,22 @@ def describe(doc: dict[str, Any]) -> str:
         lines.append("Block types: " + ", ".join(f"{n} {t}" for t, n in counts.items()))
     lines.append(f"Words: {words}")
 
+    # What read() flattened, in PHP's words.
+    raw_notes = doc.get("unrepresented")
+    section_breaks = 0
+    for note in raw_notes if isinstance(raw_notes, list) else []:
+        if (
+            isinstance(note, dict)
+            and note.get("kind") == "layout-not-preserved"
+            and isinstance(note.get("count"), int)
+        ):
+            section_breaks += note["count"]
+    if section_breaks > 0:
+        lines.append(
+            f"Layout not preserved: {section_breaks} section break"
+            f"{'' if section_breaks == 1 else 's'} flattened into the last section's page setup"
+        )
+
     return "\n".join(lines)
 
 

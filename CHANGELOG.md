@@ -11,6 +11,49 @@ minor.
 
 ## [Unreleased]
 
+**What you must do: only if your documents carry `pageBreak.orientation`,
+`pageBreak.margins` (or any page key straight on a break) or a top-level
+`sections`.** Those were silently ignored and are now errors. Remove them, or
+use `pageBreak.page`, which `fine-print` honours for PDFs today and `last-word`
+will honour in a later release. Until then `last-word` refuses it. A document
+without those keys writes exactly what 0.9.0 wrote, byte for byte. Mirrors PHP
+`particle-academy/last-word` [Unreleased], messages and paths verbatim.
+
+### Changed
+
+- **BREAKING: `pageBreak.orientation`, `pageBreak.margins`, `.size`, `.header`,
+  `.footer`, `.firstHeader`, `.firstFooter`, `.evenHeader`, `.evenFooter`,
+  `.background`, `.border` and a top-level `sections` were silently ignored and
+  are now errors.** The document came out all portrait and looked fine, with no
+  word that the request had been lost. The message names the form to use:
+  `a pageBreak has no orientation key; use pageBreak.page`, and
+  `there is no sections key; use pageBreak.page`. Every other extra key on a break
+  stays lenient. **Consumer action:** remove those keys, or for mixed pages use
+  `pageBreak.page`, which is not honoured here until a later release (below).
+
+### Added
+
+- **`pageBreak.page` is refused until it can be written** (mixed page orientation,
+  stage 1): `pageBreak.page is not implemented in last-word yet; remove page to
+  keep one page setup, or write this document as a PDF with fine-print`. It applies
+  at any depth, to `validate`, `to_bytes` and `write`.
+- **Reading a file with section breaks now says what it flattened.** `read()` has
+  always taken one page setup from such a file, the last section's, silently. It
+  now adds `unrepresented: [{"where": "/page", "kind": "layout-not-preserved",
+  "count": n}]`, `n` being the section breaks lost, and `describe()` gains a line
+  for it. Not breaking: blocks, `page` and everything else read as before, and the
+  key appears only on such a file. `Doc` gains the optional `unrepresented`. This is
+  the first use of `unrepresented` in this package; PHP also reports what a header
+  or footer could not hold, which this reader does not yet.
+
+### Fixed
+
+- **`validate_and_repair` no longer deletes what it was about to refuse.** Repair
+  rewrote every break to `{"type": "pageBreak"}`, so with any unrelated repair in
+  the document, a break carrying `page` or a near-miss key would have come back
+  `ok: True` with the key gone. Those keys now stay, and the result is `ok: False`.
+  Other extra keys on a break are still stripped by repair, as before.
+
 ## [0.9.0] - 2026-11-01
 
 Mirrors `particle-academy/last-word` 0.16.0 (8b32d04), less its template and

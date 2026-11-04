@@ -155,7 +155,12 @@ class Repairer:
         if block_type == "chart":
             return self._repair_chart(block, path)
         if block_type == "pageBreak":
-            return {"type": "pageBreak"}
+            # Rewritten to the bare break, EXCEPT what validation refuses on one:
+            # `page` and the near-miss keys stay, so the document stays `ok: False`.
+            # Stripped, any unrelated repair elsewhere would turn a refused landscape
+            # section into `ok: True` and an all-portrait document.
+            kept = ("page", *Schema.PAGE_BREAK_NEAR_MISS_KEYS)
+            return {"type": "pageBreak", **{key: block[key] for key in kept if key in block}}
         return {"type": "hr"}
 
     def _repair_heading(self, block: dict[str, Any], path: str) -> dict[str, Any]:

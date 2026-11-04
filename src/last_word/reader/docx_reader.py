@@ -399,6 +399,10 @@ class DocxReader:
         doc.update(self._parse_doc_defaults())
 
         doc["blocks"] = blocks
+        # Never document text: locations and counts only, like the exchange report.
+        breaks = _section_breaks(body) if body is not None else 0
+        if breaks > 0:
+            doc["unrepresented"] = [{"where": "/page", "kind": "layout-not-preserved", "count": breaks}]
         # A .dotx reads exactly like its .docx twin, and says so.
         if self._source_kind == office_template.TEMPLATE:
             doc["sourceKind"] = office_template.TEMPLATE
@@ -1438,6 +1442,32 @@ class DocxReader:
             block["alt"] = descr
 
         return block
+
+
+def _section_breaks(body: ET.Element) -> int:
+    """How many section breaks the body holds: paragraphs whose `w:pPr` carries a
+    `w:sectPr`, in the wrappers `_block_children` descends into.
+
+    The model has one page setup, so `page` is the last section's and every other
+    section is lost; a count of them is reported instead of the loss going unsaid.
+    The body's own final `w:sectPr` is not a break. A walk, not a recursion: this
+    nesting is attacker-supplied. Mirrors PHP `DocxReader::sectionBreaks()`.
+    """
+    count = 0
+    stack = [body]
+    while stack:
+        for node in list(stack.pop()):
+            name = _local(node.tag)
+            if name == "p":
+                if _first_child_by_name(_first_child_by_name(node, "pPr"), "sectPr") is not None:
+                    count += 1
+            elif name == "customXml":
+                stack.append(node)
+            elif name == "sdt":
+                content = _first_child_by_name(node, "sdtContent")
+                if content is not None:
+                    stack.append(content)
+    return count
 
 
 def _content_width_of(sect_pr: ET.Element | None) -> int:

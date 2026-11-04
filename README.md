@@ -183,6 +183,17 @@ the empty `{"blocks": []}`, and validation refuses a variant with blocks in it;
 and writing from a template, so PHP's `templateFirstPageOnly` option has nothing
 to apply to here.
 
+## One page setup, for now
+
+A file with section breaks reads with the last section's page and the rest
+flattened into it, and says so: `"unrepresented": [{"where": "/page", "kind":
+"layout-not-preserved", "count": 1}]`, where `count` is the section breaks lost.
+On the way in, `pageBreak.page` is refused until a later release writes it,
+`validate_and_repair` included: repair leaves it in place and the result is
+`ok: False`. The same goes for page keys written straight on a break
+(`pageBreak.orientation`, `.margins`, ...) and for a top-level `sections`, neither
+of which exists. `fine-print` honours `pageBreak.page` for PDFs today.
+
 ## Reading .doc, .odt and .rtf
 
 `read()` decides the format from the bytes, never a file name, and returns the

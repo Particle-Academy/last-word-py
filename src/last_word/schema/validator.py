@@ -349,6 +349,9 @@ class Validator:
             # TypeError from three frames deeper.
             return [_error("", "document must be an object with a \"blocks\" list")]
 
+        if "sections" in doc:
+            errors.append(_error("sections", "there is no sections key; use pageBreak.page"))
+
         if doc.get("defaultFont") is not None and not isinstance(doc["defaultFont"], str):
             errors.append(_error("defaultFont", "defaultFont must be a font family name"))
         _check_number(doc.get("defaultSize"), "defaultSize", "defaultSize", errors, True)
@@ -468,7 +471,31 @@ class Validator:
             self._validate_image(block, path, errors)
         elif block_type == "chart":
             _validate_chart(block, path, errors)
-        # pageBreak / hr carry nothing to check.
+        elif block_type == "pageBreak":
+            self._validate_page_break(block, path, errors)
+        # hr carries nothing to check.
+
+    @staticmethod
+    def _validate_page_break(block: dict, path: str, errors: list[dict[str, str]]) -> None:
+        """A break asking for a different page. A .docx has one page setup until the
+        writer implements `page`, so it is refused rather than ignored: a document
+        that silently comes out all portrait looks fine. Repair leaves these keys in
+        place, so `validate_and_repair` stays `ok: False`. Mirrors PHP
+        `Validator::validatePageBreak()`, messages and paths verbatim.
+        """
+        if "page" in block:
+            errors.append(
+                _error(
+                    f"{path}.page",
+                    "pageBreak.page is not implemented in last-word yet; remove page to keep "
+                    "one page setup, or write this document as a PDF with fine-print",
+                )
+            )
+        for key in Schema.PAGE_BREAK_NEAR_MISS_KEYS:
+            if key in block:
+                errors.append(
+                    _error(f"{path}.{key}", f"a pageBreak has no {key} key; use pageBreak.page")
+                )
 
     def _validate_heading(self, block: dict, path: str, errors: list[dict[str, str]]) -> None:
         level: Any = block.get("level")

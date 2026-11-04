@@ -138,13 +138,26 @@ class Meta(TypedDict, total=False):
     author: str
 
 
+class UnrepresentedNote(TypedDict):
+    """What `read()` found in a file and could not represent: locations and counts
+    only, never document text. Here, `{"where": "/page", "kind":
+    "layout-not-preserved", "count": n}`: the section breaks flattened into one page
+    setup."""
+
+    where: str
+    kind: str
+    count: int
+
+
 class Doc(TypedDict, total=False):
     """`{title?, meta?, page?, blocks}` -- the whole document model. `page`
-    (size, margins, the six bands) is left untyped here; see `json_schema()`."""
+    (size, margins, the six bands) is left untyped here; see `json_schema()`.
+    `unrepresented` is set by `read()` only and ignored on write."""
 
     title: str
     meta: Meta
     blocks: list[Block]
+    unrepresented: list[UnrepresentedNote]
 
 
 class ValidationError(TypedDict):

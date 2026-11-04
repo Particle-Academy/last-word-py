@@ -56,6 +56,24 @@ class Schema:
     #: node, so here it is an unknown block type either way.
     FOOTNOTE_REFUSED_TYPES: tuple[str, ...] = ("chart", "pageBreak", "portable")
 
+    #: The page object's own keys, which an agent writes straight on a `pageBreak`
+    #: when it means `pageBreak.page`. Each is refused by name rather than ignored
+    #: as a decoration: ignored, the document comes out all portrait and looks
+    #: fine. Mirrors PHP `Schema::PAGE_BREAK_NEAR_MISS_KEYS`, order included.
+    PAGE_BREAK_NEAR_MISS_KEYS: tuple[str, ...] = (
+        "size",
+        "orientation",
+        "margins",
+        "header",
+        "footer",
+        "firstHeader",
+        "firstFooter",
+        "evenHeader",
+        "evenFooter",
+        "background",
+        "border",
+    )
+
     #: What a page margin is when the document does not say, in points: one
     #: inch each side, and half an inch from the page edge to the header and to
     #: the footer. The reader OMITS a value equal to these (a page read back

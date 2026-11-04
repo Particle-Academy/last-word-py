@@ -4,7 +4,9 @@ Byte-identical copies of `tests/fixtures/formats/` in the PHP package,
 `particle-academy/last-word`, where they were made and where their full
 description lives. Do not regenerate them here: regenerate them there and copy
 all of them into the Node and Python ports together, or the three engines stop
-being compared on the same bytes.
+being compared on the same bytes. `two-sections.docx` and `two-sections.read.json`
+are copied the same way; `tests/Support/build-two-sections.php` in the PHP package
+builds them.
 
 | File | Made by |
 |---|---|
