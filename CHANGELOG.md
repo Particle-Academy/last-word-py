@@ -11,6 +11,8 @@ minor.
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-11-08
+
 ### Security
 
 - **A chart's cached number is read in linear time.** The pattern could backtrack badly on a very long run of digits in a hostile file's chart cache. Every value it read is still read the same. **Consumer action:** none.
