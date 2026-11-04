@@ -263,6 +263,7 @@ def _lw_schema_def(schema: dict, name: str) -> dict:
         "heading": blocks["heading"],
         "table": blocks["table"],
         "image": blocks["image"],
+        "pageBreak": blocks["pageBreak"],
         "listItem": schema["$defs"]["listItem"],
         "tableRow": table["rows"]["items"],
         "tableCell": table["rows"]["items"]["properties"]["cells"]["items"],
@@ -292,7 +293,7 @@ def test_satisfies_the_last_word_half_of_doc_model_shared(capsys: pytest.Capture
     PHP as its runner; each package runs ITS half: `compare` -> last-word's
     property set is exactly `both` + `lastWordOnly`; `constraint` -> its
     keywords are exactly `lastWord`. Row 0006 (since 0.40.0) lists `footnote`
-    as a last-word-only run property.
+    in last-word's half of the run properties.
     """
     from last_word import json_schema
 
@@ -319,17 +320,48 @@ def test_satisfies_the_last_word_half_of_doc_model_shared(capsys: pytest.Capture
             f"{len(cases) - len(failed)} passed, {len(failed)} failed (known: {sorted(DOC_MODEL_KNOWN_GAPS)}) of {len(cases)}"
         )
 
-    # 0.41.0: meta and the band variants are recorded as last-word-only, and
+    # 0.41.0: meta and the band variants are in last-word's half (0.44.0 moved them
+    # and footnote from last-word-only to both, as fine-print gained them), and
     # this port has every one of them, so the last-word half of 0002 differs
     # from this schema by background / border and nothing else.
     by_id = {c["id"]: c for c in cases}
-    assert "meta" in by_id["0001-document"]["expected"]["lastWordOnly"]
+    doc_row = by_id["0001-document"]["expected"]
+    assert "meta" in {*doc_row["both"], *doc_row["lastWordOnly"]}
     page_props = set(schema["properties"]["page"]["properties"])
     page_want = {*by_id["0002-page"]["expected"]["both"], *by_id["0002-page"]["expected"]["lastWordOnly"]}
     assert page_want - page_props == {"background", "border"}, page_want - page_props
     assert page_props <= page_want
 
     run_rows = [c for c in cases if c["input"]["def"] == "run"]
-    assert len(run_rows) == 1 and "footnote" in run_rows[0]["expected"]["lastWordOnly"]
+    run_row = run_rows[0]["expected"]
+    assert len(run_rows) == 1 and "footnote" in {*run_row["both"], *run_row["lastWordOnly"]}
     assert len(cases) >= 20, "doc-model/shared barely loaded"
     assert sorted(failed) == sorted(DOC_MODEL_KNOWN_GAPS), failed
+
+
+def test_satisfies_the_last_word_half_of_page_refusal(capsys: pytest.CaptureFixture[str]) -> None:
+    """The last-word half of `doc-model/page-refusal`: the same messages as PHP.
+
+    Messages only: paths differ by runtime, and the suite says so.
+    """
+    from last_word import validate, validate_and_repair
+
+    cases = loader.cases("doc-model/page-refusal")
+    failed: dict[str, str] = {}
+    for case in cases:
+        doc, want = case["input"]["doc"], case["expected"]["lastWord"]
+        got: dict = {"repairOk": validate_and_repair(doc)["ok"]}
+        if "messages" in want:
+            got["messages"] = [e["message"] for e in validate(doc)]
+        if not loader.equals(got, want):
+            failed[case["id"]] = f"expected {want} got {got}"
+
+    with capsys.disabled():
+        print()
+        print(
+            f"doc-model/page-refusal [python, last-word half] - fancy-conformance {loader.version()}: "
+            f"{len(cases) - len(failed)} passed, {len(failed)} failed of {len(cases)}"
+        )
+
+    assert len(cases) >= 18, "doc-model/page-refusal barely loaded"
+    assert failed == {}, failed
