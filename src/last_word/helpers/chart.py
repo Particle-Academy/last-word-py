@@ -26,7 +26,7 @@ DEFAULT_ASPECT = 0.6
 
 _HEX_RE = re.compile(r"^#([0-9A-Fa-f]{6})$")
 _EXP_RE = re.compile(r"^(-?)(\d)(?:\.(\d+))?e([+-]?\d+)$")
-_DECIMAL_RE = re.compile(r"^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$")
+_DECIMAL_RE = re.compile(r"^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$")
 
 
 def _is_number(value: Any) -> bool:

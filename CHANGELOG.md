@@ -11,6 +11,10 @@ minor.
 
 ## [Unreleased]
 
+### Security
+
+- **A chart's cached number is read in linear time.** The pattern could backtrack badly on a very long run of digits in a hostile file's chart cache. Every value it read is still read the same. **Consumer action:** none.
+
 ## [0.12.0] - 2026-11-04
 
 **What you must do: only if you read a `.docx` with more than one section, or wrote a page key straight on a break.** Otherwise a document writes exactly what it did, byte for byte, and reads what it did.
