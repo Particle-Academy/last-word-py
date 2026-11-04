@@ -19,6 +19,7 @@ import re
 import xml.etree.ElementTree as ET
 from typing import Any
 
+from ..archive import part_xml
 from ..helpers.chart import DEFAULT_PALETTE, parse_num
 
 NS_C = "http://schemas.openxmlformats.org/drawingml/2006/chart"
@@ -66,12 +67,8 @@ def _val(el: ET.Element | None) -> str | None:
 
 def read(xml: bytes | str) -> dict[str, Any] | None:
     """`{"option": ..., "numberFormat": str | None}`, or None for a chart outside the model."""
-    raw = xml.encode("utf-8") if isinstance(xml, str) else xml
-    if b"<!DOCTYPE" in raw or b"<!doctype" in raw:
-        return None
-    try:
-        root = ET.fromstring(raw)
-    except ET.ParseError:
+    root = part_xml.parse(xml)
+    if root is None:
         return None
 
     chart = _child(root, "chart")

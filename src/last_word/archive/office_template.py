@@ -40,6 +40,7 @@ import zlib
 from typing import Any
 
 from ..exceptions import OfficeTemplateRefused
+from . import part_xml
 from .source_archive import SourceArchive
 
 DOCUMENT = "document"
@@ -352,12 +353,7 @@ def _rebuild(archive: SourceArchive, replacements: dict[str, bytes]) -> bytes:
 
 
 def _parse(xml: bytes | None) -> ET.Element | None:
-    if xml is None or xml == b"" or b"<!DOCTYPE" in xml or b"<!doctype" in xml:
-        return None
-    try:
-        return ET.fromstring(xml)
-    except ET.ParseError:
-        return None
+    return part_xml.parse(xml)
 
 
 def _local(tag: Any) -> str:

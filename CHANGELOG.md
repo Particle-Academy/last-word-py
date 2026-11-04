@@ -11,6 +11,14 @@ minor.
 
 ## [Unreleased]
 
+### Security
+
+- Every XML part of a file now goes through one gate (`archive/part_xml.py`), which
+  refuses a part declaring a DOCTYPE. A refused part reads as an unparsable one: an ODT
+  part raises as it did, and any other part reads as absent. **Consumer action:** none;
+  no Word or ODF file has a DOCTYPE. A part that merely mentions the word in its text is
+  no longer refused.
+
 ## [0.11.0] - 2026-11-03
 
 **What you must do: only if you write a table cell with a `colSpan` above 1000.**

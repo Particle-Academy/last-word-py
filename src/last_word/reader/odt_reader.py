@@ -39,6 +39,7 @@ from ..archive import office_template
 from ..archive.source_archive import SourceArchive
 from ..helpers.php import PHP_TRIM_CHARS, is_numeric
 from ..schema.schema import Schema
+from ..archive.part_xml import declares_doctype
 from .odt.xml_dom import Element, parse_dom, text_content
 from .structure import clamp, has_text, lists, merge_runs, php_int
 
@@ -322,7 +323,7 @@ def _push(out: list[dict[str, Any]], text: str, flags: dict[str, bool], link: st
 def _parse(xml: str | None, name: str, required: bool) -> Element | None:
     if xml is None:
         return None
-    if re.search(r"<!DOCTYPE", xml, re.IGNORECASE):
+    if declares_doctype(xml):
         raise RuntimeError(f"ODT part {name} carries a DOCTYPE, which an ODT never does; refusing to parse it.")
     try:
         return parse_dom(xml)

@@ -17,6 +17,7 @@ src/last_word/exceptions.py      SchemaException, UnsupportedFormatException, Ar
 src/last_word/cli.py             `last-word template:convert` (PHP: src/Cli.php + bin/last-word); __main__.py runs it
 src/last_word/archive/source_archive.py   bounded zip validation before any read (PHP Archive/SourceArchive, Node zip/source-archive.ts)
 src/last_word/archive/office_template.py  .dotx/.ott classification + template:convert (PHP Archive/OfficeTemplate)
+src/last_word/archive/part_xml.py         the one way an XML part gets parsed (PHP Archive/PartXml, Node reader/part-xml.ts)
 src/last_word/schema/schema.py   Schema (VERSION, json_schema())
 src/last_word/schema/validator.py
 src/last_word/schema/repairer.py
@@ -106,9 +107,10 @@ that last one `ZipInfo` picks the host platform and the same document produces
 different bytes on Windows and Linux. Nothing writes a temp file: the archive is
 built in a `BytesIO`, unlike PHP, whose `ZipArchive` needs a real path.
 
-**The reader refuses a DOCTYPE before parsing.** A `.docx` never legitimately
-carries one, and it is the entry point for entity-expansion attacks. A part
-carrying one is treated as unparsable rather than trusted to a parser flag.
+**Every XML part goes through `archive/part_xml.py`, which refuses a DOCTYPE.** A
+`.docx` never legitimately carries one, and it is the entry point for
+entity-expansion attacks. A part carrying one is treated as unparsable rather than
+trusted to a parser flag. `test_part_xml.py` fails if `src/` parses XML anywhere else.
 
 **The reader's deep walks use explicit stacks.** `_parse_inline_container`,
 `_block_children` and `_first_descendant_by_name` are all driven by
@@ -185,6 +187,7 @@ peers' (`.ai/knowledge/last-word-spec.md`, and `documents.md` §5.4 for 9–11):
 | `test_source_archive.py` | the archive guard's limits and reason codes, case for case with PHP `SourceArchiveTest` and Node `source-archive.test.ts` |
 | `test_office_template.py` | `.dotx` / `.ott` reading, `.dotm` and cross-family refusals, `convert_template` and the CLI, case for case with PHP `OfficeTemplateTest`; the LibreOffice oracle case runs where LibreOffice is installed and skips elsewhere |
 | `test_template_parity_php.py` | the converter's WHOLE output archive, byte for byte against PHP (the converter writes the container itself, so unlike the writer's it IS comparable) |
+| `test_part_xml.py` | the XML gate through the public reader and on its own, case for case with PHP's `PartXmlTest` |
 | `test_php_helpers.py` | the shims, `php_round` above all |
 | `test_doc_ops.py` | `diff` / `reduce` / `op_schema` / `equivalent`, case for case with PHP's `DocOpsTest` |
 | `test_doc_ops_parity_php.py` | the same ops, key order and int/float included, as PHP's `Agent::diff` / `reduce` over one batched `scripts/php_ops.php` run |

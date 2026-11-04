@@ -55,7 +55,7 @@ import re
 from typing import Any
 from xml.etree import ElementTree as ET
 
-from ..archive import office_template
+from ..archive import office_template, part_xml
 from ..archive.source_archive import SourceArchive
 from ..helpers.chart import DEFAULT_ASPECT
 from ..helpers.php import is_numeric, php_float, php_int_round, php_round
@@ -310,13 +310,7 @@ def _parse_xml(xml: str | bytes) -> ET.Element | None:
     The DOCTYPE refusal is a security boundary, not tolerance: see the module
     docstring.
     """
-    raw = xml.encode("utf-8") if isinstance(xml, str) else xml
-    if b"<!DOCTYPE" in raw or b"<!doctype" in raw:
-        return None
-    try:
-        return ET.fromstring(raw)
-    except ET.ParseError:
-        return None
+    return part_xml.parse(xml)
 
 
 class DocxReader:
@@ -621,7 +615,7 @@ class DocxReader:
         if target.startswith("/"):
             name = target.lstrip("/")
         xml = archive.read(name)
-        if xml is None or b"<!doctype" in xml.lower():
+        if xml is None:
             return
         root = _parse_xml(xml)
         if root is None:
@@ -635,7 +629,7 @@ class DocxReader:
         part_rels = archive.read("word/_rels/" + posixpath.basename(name) + ".rels")
         self._footnote_rels = (
             self._parse_rels(part_rels)
-            if part_rels is not None and b"<!doctype" not in part_rels.lower()
+            if part_rels is not None
             else {}
         )
 
@@ -1608,8 +1602,6 @@ def _merge_runs(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _settings_even_and_odd(xml: bytes) -> bool:
     """Whether a settings part turns on even/odd headers. A DOCTYPE leaves it off.
     PHP `settingsEvenAndOdd()`."""
-    if b"<!doctype" in xml.lower():
-        return False
     root = _parse_xml(xml)
     el = _first_child_by_name(root, "evenAndOddHeaders") if root is not None else None
     return el is not None and _toggle_on(_w_attr(el, "val"))
