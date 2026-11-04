@@ -394,7 +394,7 @@ def _layout_rows(rows: list[dict[str, Any]]) -> tuple[list[list[dict[str, Any]]]
             if nxt < len(authored):
                 cell = authored[nxt]
                 nxt += 1
-                span = max(1, int(php_float(cell.get("colSpan"))) if is_numeric(cell.get("colSpan")) else 1)
+                span = Schema.col_span(cell.get("colSpan"))
                 row_span = max(1, int(php_float(cell.get("rowSpan"))) if is_numeric(cell.get("rowSpan")) else 1)
                 line.append(
                     {

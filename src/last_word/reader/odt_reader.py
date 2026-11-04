@@ -38,6 +38,7 @@ from typing import Any
 from ..archive import office_template
 from ..archive.source_archive import SourceArchive
 from ..helpers.php import PHP_TRIM_CHARS, is_numeric
+from ..schema.schema import Schema
 from .odt.xml_dom import Element, parse_dom, text_content
 from .structure import clamp, has_text, lists, merge_runs, php_int
 
@@ -239,7 +240,7 @@ class OdtReader:
                     col_span = php_int(cell.attrs.get("table:number-columns-spanned"))
                     row_span = php_int(cell.attrs.get("table:number-rows-spanned"))
                     if col_span > 1:
-                        out["colSpan"] = min(col_span, _MAX_REPEAT)
+                        out["colSpan"] = min(col_span, Schema.MAX_COL_SPAN)
                     if row_span > 1:
                         out["rowSpan"] = min(row_span, _MAX_REPEAT)
                     repeat = max(1, min(php_int(cell.attrs.get("table:number-columns-repeated")), _MAX_REPEAT))

@@ -626,6 +626,10 @@ class Validator:
                                 f"{cell_path}.{span}", f"{span} must be an integer of 1 or more"
                             )
                         )
+                    elif span == "colSpan" and value is not None and value > Schema.MAX_COL_SPAN:
+                        errors.append(
+                            _error(f"{cell_path}.colSpan", f"colSpan must be at most {Schema.MAX_COL_SPAN}")
+                        )
                 self._validate_blocks(cell["blocks"], f"{cell_path}.blocks", errors)
 
     def _validate_code(self, block: dict, path: str, errors: list[dict[str, str]]) -> None:

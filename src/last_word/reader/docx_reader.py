@@ -1289,8 +1289,8 @@ class DocxReader:
                 v_merge: str | None = None
                 if tc_pr is not None:
                     grid_span = _first_child_by_name(tc_pr, "gridSpan")
-                    if grid_span is not None and is_numeric(_w_attr(grid_span, "val")):
-                        span = max(1, int(php_float(_w_attr(grid_span, "val"))))
+                    if grid_span is not None:
+                        span = Schema.col_span(_w_attr(grid_span, "val"))
                     v_merge_node = _first_child_by_name(tc_pr, "vMerge")
                     if v_merge_node is not None:
                         v_merge = _w_attr(v_merge_node, "val") or "continue"

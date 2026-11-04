@@ -13,6 +13,7 @@ import re
 from typing import Any, ClassVar
 
 from ..helpers.chart import SUPPORTED_TYPES as SUPPORTED_CHART_TYPES
+from ..helpers.php import is_numeric, php_float
 
 # PHP `/^\s*([A-Za-z]+)(.*)$/s` and `/\\@\s*(?:"([^"]*)"|(\S+))/`, no `/u`.
 _FIELD_WORD = re.compile(r"^\s*([A-Za-z]+)(.*)$", re.DOTALL | re.ASCII)
@@ -190,6 +191,31 @@ class Schema:
 
     #: Max heading level in the model (Word tolerates 9; we clamp on read/repair).
     MAX_HEADING_LEVEL = 6
+
+    #: The most columns one table cell may span. Columns are what a span costs:
+    #: the writer makes work per grid column, so without a ceiling a few bytes of
+    #: JSON could ask for any amount of it. 1000 is the limit HTML puts on
+    #: `colspan` and the one this package's `.odt` reader and fine-print already
+    #: use. `rowSpan` has no ceiling: nothing costs more than the rows that exist.
+    MAX_COL_SPAN = 1000
+
+    @staticmethod
+    def col_span(value: Any) -> int:
+        """A span from an unvalidated document or a file, as PHP's clamped `(int)`.
+
+        Never throws: an integer no float can hold and an exponent that overflows
+        are both ordinary input here, and `int(float("inf"))` raises.
+        """
+        if not is_numeric(value):
+            return 1
+        if isinstance(value, int):
+            number = value
+        else:
+            real = php_float(value)
+            if math.isinf(real) or math.isnan(real):
+                return 1
+            number = int(real)
+        return max(1, min(Schema.MAX_COL_SPAN, number))
 
     @staticmethod
     def json_schema() -> dict[str, Any]:
@@ -423,7 +449,7 @@ class Schema:
                                             "borders": {"$ref": "#/$defs/boxBorders"},
                                             "padding": {"$ref": "#/$defs/boxSides"},
                                             "valign": {"enum": ["top", "center", "bottom"]},
-                                            "colSpan": {"type": "integer", "minimum": 1},
+                                            "colSpan": {"type": "integer", "minimum": 1, "maximum": Schema.MAX_COL_SPAN},
                                             "rowSpan": {
                                                 "type": "integer",
                                                 "minimum": 1,

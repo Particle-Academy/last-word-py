@@ -178,6 +178,24 @@ DOCS["canonical"] = canonical()
 # the engines could plausibly disagree and nothing would say so. Kept SEPARATE
 # from `DOCS` so the shared five stay recognisably the shared five.
 EXTRA_DOCS: dict[str, Any] = {
+    # A span at the ceiling: every grid column and the widths summed for the cell.
+    "col_span_at_ceiling": {
+        "blocks": [
+            {
+                "type": "table",
+                "rows": [
+                    {
+                        "cells": [
+                            {
+                                "blocks": [{"type": "paragraph", "runs": [{"text": "wide"}]}],
+                                "colSpan": 1000,
+                            }
+                        ]
+                    }
+                ],
+            }
+        ]
+    },
     # Running header + footer with live page fields, on narrowed margins (the
     # tab stops follow them), plus a hyperlink so a band rel shifting the
     # numbered rel ids would show.

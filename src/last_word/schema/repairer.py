@@ -263,6 +263,13 @@ class Repairer:
                         self._note(f"{cell_path}.blocks", "defaulted missing cell blocks to []")
                         cell_blocks = []
                 cell["blocks"] = self._repair_blocks(cell_blocks, f"{cell_path}.blocks")
+                span = cell.get("colSpan")
+                if isinstance(span, int) and not isinstance(span, bool) and span > Schema.MAX_COL_SPAN:
+                    # `{span}` would raise past 4300 digits, so a span no real
+                    # document has is named by its limit, not printed.
+                    shown = span if span < 10**18 else "over 10^18"
+                    self._note(f"{cell_path}.colSpan", f"clamped colSpan {shown} to {Schema.MAX_COL_SPAN}")
+                    cell["colSpan"] = Schema.MAX_COL_SPAN
                 out_cells.append(cell)
             row["cells"] = out_cells
             if row.get("header") is not None and not isinstance(row["header"], bool):
