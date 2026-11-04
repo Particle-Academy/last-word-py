@@ -69,9 +69,13 @@ import fancy_conformance as loader
 # doc-model/shared 0001 / 0002 record `meta` and the four band variants as
 # last-word-only. Re-run against a checkout at the v0.41.0 tag first.
 #
+# Moved 0.41.0 -> 0.44.0 on 2026-11-03 with the mixed page refusals: 0.44.0 adds
+# doc-model/page-refusal and doc-model/shared 0015-page-break, and fine-print now
+# draws what 0001 / 0002 / 0006 recorded as last-word-only. Run at the v0.44.0 tag.
+#
 # CI checks out `ref: v<this>` from .github/workflows/ci.yml. Move the two
 # together; test_ci_checks_out_the_fixture_tag_this_suite_pins fails otherwise.
-PINNED_SUITE_VERSION = "0.41.0"
+PINNED_SUITE_VERSION = "0.44.0"
 
 
 def test_the_pinned_fixture_version_is_the_one_on_disk(capsys: pytest.CaptureFixture[str]) -> None:
