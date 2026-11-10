@@ -18,6 +18,10 @@ with the package's JSON schema (`Agent::jsonSchema()` / `Agent.jsonSchema()` / `
    every derived number, computed and checked before anything is written.
 2. Build the whole JSON in one go, following the recipes below.
 3. Check it: `Agent::validate` (PHP), `Agent.validate` (Node) or `validate` (Python) returns errors with a hint each.
+   `Agent::validateAndRepair($doc)` (`validate_and_repair`) also applies safe repairs and returns
+   `{ok, schema, errors}`: bare strings become runs, heading levels clamp to 1-6, a `colSpan`
+   over 1000 clamps, a page key written straight on a break moves into `page`. Write the
+   repaired `schema` when `ok` is true; when it is false, fix only the paths `errors` names.
    In PHP, check the length too: `Agent::layout($doc)` returns the page count and the block
    each page starts with, as the last-word-ui viewer draws them (PHP only for now).
 4. Write it (`Agent::write` / `Agent.toBytes` / `to_bytes`). If you can render the file and look at it, do,
@@ -131,6 +135,37 @@ genre, lead with what the reader must know or decide, and analyse rather than re
 - **Report:** title, subtitle and date; executive summary (3-5 sentences); sections
   with numbered headings; tables and figures captioned and sourced; conclusion or
   recommendations.
+
+## Working from an existing document
+
+- Read: `Agent::read($bytesOrPath)` (Node `Agent.read(bytes)`) takes .docx, .doc, .odt or .rtf,
+  told apart by content, and returns the same JSON you write; `fromBytes` is its alias. A file
+  with several sections reads with the first section's `page` on top and each later section as
+  a `pageBreak` whose `page` holds only what differs. What the JSON cannot hold (text columns, a
+  page-number restart, a paper size other than letter, legal or A4) is listed in `unrepresented`
+  with kind `layout-not-preserved`: it was in the source, not a fault of yours.
+- Summarise before you dump: `Agent::describe($doc)` is a plain-text summary (title, block
+  counts, word count, page stretches), far cheaper to read than the JSON.
+- Edit, never regenerate: change only what was asked as ops. `Agent::opSchema()` is the JSON
+  Schema for one op (`{op:"blocks.replace", path:"/blocks", index:3, block:{...}}`; also
+  `insert`, `remove`, `move`, and the same for `items`, `rows`, `cells`, plus `doc.set`).
+  `Agent::reduce($doc, $ops)` applies one op or a list; an op that does not resolve is skipped.
+  `Agent::diff($a, $b)` gives the ops from `$a` to `$b` (store `diff($new, $old)` to keep a
+  version), and `Agent::equivalent($a, $b)` says whether two documents write the same file.
+- Markdown: `Agent::toMarkdown($doc)` and `Agent::fromMarkdown($markdown)`.
+  `toMarkdownWithReport` (PHP) adds what markdown could not carry, by kind and location.
+- Templates: `Agent::convertTemplate($bytesOrPath, $to)` turns a .dotx / .ott into its .docx /
+  .odt twin or back (`$to` is `document`, `template` or null to flip). Macro-enabled files are
+  refused.
+- Content from another Fancy package (PHP): put `{type:"portable", content:...}` in `blocks`
+  and `validateAndRepair` expands it, or convert first with `Agent::fromPortable($content)`;
+  `Agent::validateContent($content)` checks it without converting. The other way,
+  `Agent::catalog($input)` indexes the headings and tables with a selector each,
+  `Agent::extract($input, $selector)` grabs one as portable content and
+  `Agent::toPortable($doc, $selector)` does the same for a document you hold.
+  `Agent::export($input, $target, $options, $policy)` (markdown, text, html, docx) is off
+  unless the host's policy enables the target; `Agent::exportToolDefinition($policy)` is the
+  tool that lists only those.
 
 ## Failures we have seen (do not repeat)
 

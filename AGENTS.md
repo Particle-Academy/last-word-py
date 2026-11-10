@@ -205,6 +205,13 @@ Assert image sizing on the **read-back model**, not on EMU — a rounding-order
 difference then surfaces as a model diff instead of hiding inside an extent
 nobody compares.
 
+**The agent guide is part of the shipped surface.** `src/last_word/agent_guide.md`
+is the PHP package's guide byte for byte (`test_agent_guide.py` pins the hash),
+and `test_agent_guide_covers_the_api.py` fails on an exported Agent function it
+never names. Release checklist:
+
+- [ ] guide reviewed against this release's CHANGELOG
+
 ## Known non-fixpoints
 
 `md → docx → md` is **not** byte-identical when the document has a table header

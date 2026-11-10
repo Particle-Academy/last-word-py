@@ -11,6 +11,14 @@ minor.
 
 ## [Unreleased]
 
+### Changed
+
+- **The agent guide (`guide()`) covers the whole Agent surface.** Byte-identical to the PHP package's: it gains a "Working from an existing document" section (`read` / `from_bytes` and how a multi-section file reads, `describe`, editing by ops with `op_schema` / `reduce` / `diff` / `equivalent`, the markdown bridges, `convert_template`, and the PHP-only exchange surface), and step 3 names `validate_and_repair`. The shared guide spells names in camelCase; the snake_case function is the same one. **Consumer action:** none; a guide-only change.
+
+### Added
+
+- Dev: `tests/test_agent_guide_covers_the_api.py` fails when a function in `last_word.agent` exported in `__all__` exists that the guide never names as code (snake_case or camelCase), unless it is on the test's allowlist with a reason (today `guide` and `version`).
+
 ## [0.12.1] - 2026-11-04
 
 ### Security
