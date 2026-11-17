@@ -10,7 +10,7 @@ The Python mirror of PHP `particle-academy/last-word` and Node
 JSON document model, plus markdown bridges.
 
 This file describes **this repository's code**. Process — releases, version
-policy, backports, cross-repo conventions — lives in the envelope's `AGENTS.md`
+policy, backports, cross-repo conventions — lives in the envelope's `RULES.md`
 and must not be copied here.
 
 ## Layout
